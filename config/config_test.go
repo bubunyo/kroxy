@@ -1,0 +1,86 @@
+package config_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/bubunyo/kroxy/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func writeFile(t *testing.T, contents string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(contents), 0o600))
+	return p
+}
+
+func TestLoad(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr bool
+		check   func(t *testing.T, c config.Config)
+	}{
+		{
+			name: "minimal valid",
+			yaml: `
+advertised: "kroxy:9092"
+upstream:
+  bootstrap: "kafka:9092"
+resolver:
+  users:
+    - username: alice
+      password: alicepw
+      tenant_id: tenantA
+      topic_prefix: "tenantA."
+      upstream_sasl:
+        username: kroxy
+        password: kroxypw
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.Equal(t, ":9092", c.Listen)
+				assert.Equal(t, "info", c.Log.Level)
+				assert.Equal(t, "json", c.Log.Format)
+				users := c.MemoryUsers()
+				require.Len(t, users, 1)
+				assert.Equal(t, "alice", users[0].Username)
+				assert.Equal(t, "kafka:9092", users[0].Upstream)
+			},
+		},
+		{
+			name:    "missing advertised",
+			yaml:    `upstream: { bootstrap: "k:9092" }`,
+			wantErr: true,
+		},
+		{
+			name: "missing users",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := writeFile(t, tt.yaml)
+			c, err := config.Load(p)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.check != nil {
+				tt.check(t, c)
+			}
+		})
+	}
+}
