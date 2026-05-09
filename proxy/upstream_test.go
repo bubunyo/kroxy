@@ -252,7 +252,7 @@ func startTestServerWithUpstream(t *testing.T, upstreamAddr string) (string, fun
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	srv := proxy.NewServer(proxy.ServerConfig{Listen: addr, Advertised: addr}, r, log)
+	srv := proxy.NewServer(proxy.ServerConfig{Listen: addr, Advertised: addr}, r, nil, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = srv.Run(ctx); close(done) }()
@@ -308,8 +308,8 @@ func TestM2_PassthroughForwardsAndRewritesCorrelationID(t *testing.T) {
 	_ = recvResponse(t, c, authResp, protocol.SaslAuthenticateKey, 1)
 	require.Equal(t, int16(0), authResp.ErrorCode)
 
-	// Now send a DescribeConfigs request — still byte-passthrough in M3.
-	dcReq := kmsg.NewPtrDescribeConfigsRequest()
+	// Now send an OffsetForLeaderEpoch request — still byte-passthrough.
+	dcReq := kmsg.NewPtrOffsetForLeaderEpochRequest()
 	dcReq.SetVersion(0)
 	clientCID := int32(4242)
 	sendRequest(t, c, dcReq, clientCID, "test")
@@ -323,16 +323,16 @@ func TestM2_PassthroughForwardsAndRewritesCorrelationID(t *testing.T) {
 	assert.Equal(t, clientCID, gotCID, "client must see original correlation id")
 
 	off := 4
-	if protocol.ResponseHeaderVersion(protocol.DescribeConfigsKey, 0) >= 1 {
+	if protocol.ResponseHeaderVersion(protocol.OffsetForLeaderEpoch, 0) >= 1 {
 		off++
 	}
 	assert.Equal(t, []byte("PING"), frame[off:])
 
-	// Verify the upstream actually saw a DescribeConfigs request and that
+	// Verify the upstream actually saw an OffsetForLeaderEpoch request and that
 	// we sent PLAIN credentials to it (not the client's).
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
-	assert.Contains(t, broker.gotKeys, protocol.DescribeConfigsKey)
+	assert.Contains(t, broker.gotKeys, protocol.OffsetForLeaderEpoch)
 	assert.Equal(t, "\x00kroxy\x00kroxypw", broker.gotCreds)
 }
 

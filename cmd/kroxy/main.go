@@ -39,10 +39,15 @@ func run() error {
 		return err
 	}
 
+	var metrics *observability.Metrics
+	if cfg.Metrics.Enabled {
+		metrics = observability.NewMetrics()
+	}
+
 	srv := proxy.NewServer(proxy.ServerConfig{
 		Listen:     cfg.Listen,
 		Advertised: cfg.Advertised,
-	}, res, log)
+	}, res, metrics, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -50,10 +55,19 @@ func run() error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
 
+	metricsErrCh := make(chan error, 1)
+	if metrics != nil {
+		go func() { metricsErrCh <- observability.ServeMetrics(ctx, cfg.Metrics.Listen, metrics, log) }()
+	}
+
 	select {
 	case <-ctx.Done():
 		log.Info("shutdown requested")
 	case err := <-errCh:
+		if err != nil {
+			return err
+		}
+	case err := <-metricsErrCh:
 		if err != nil {
 			return err
 		}

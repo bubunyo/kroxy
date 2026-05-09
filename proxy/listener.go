@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bubunyo/kroxy/observability"
 	"github.com/bubunyo/kroxy/resolver"
 	pkgerrors "github.com/pkg/errors"
 )
@@ -19,6 +20,7 @@ import (
 type Server struct {
 	cfg      ServerConfig
 	resolver resolver.Resolver
+	metrics  *observability.Metrics
 	log      *slog.Logger
 
 	listener net.Listener
@@ -32,8 +34,9 @@ type ServerConfig struct {
 }
 
 // NewServer constructs a Server. It does not start listening; call Run.
-func NewServer(cfg ServerConfig, r resolver.Resolver, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, resolver: r, log: log}
+// metrics may be nil to disable observation.
+func NewServer(cfg ServerConfig, r resolver.Resolver, m *observability.Metrics, log *slog.Logger) *Server {
+	return &Server{cfg: cfg, resolver: r, metrics: m, log: log}
 }
 
 // Run begins accepting connections until ctx is cancelled or the listener
@@ -74,8 +77,14 @@ func (s *Server) handle(ctx context.Context, nc net.Conn) {
 	defer cancel()
 
 	log := s.log.With("client", nc.RemoteAddr().String())
-	c := newConn(connCtx, nc, s.resolver, s.cfg, log)
+	c := newConn(connCtx, nc, s.resolver, s.cfg, s.metrics, log)
 	defer c.close()
+
+	if s.metrics != nil {
+		s.metrics.ConnectionsTotal.Inc()
+		s.metrics.ConnectionsActive.Inc()
+		defer s.metrics.ConnectionsActive.Dec()
+	}
 
 	if err := c.serve(); err != nil && !errors.Is(err, errClientClosed) {
 		log.WarnContext(connCtx, "connection terminated", "err", err)

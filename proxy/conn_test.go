@@ -24,7 +24,7 @@ func startTestServer(t *testing.T) (string, func()) {
 	require.NoError(t, err)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := proxy.NewServer(proxy.ServerConfig{Listen: "127.0.0.1:0", Advertised: "127.0.0.1:0"}, r, log)
+	srv := proxy.NewServer(proxy.ServerConfig{Listen: "127.0.0.1:0", Advertised: "127.0.0.1:0"}, r, nil, log)
 
 	// Bind ourselves first to get a port; then re-create with that port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -32,7 +32,7 @@ func startTestServer(t *testing.T) (string, func()) {
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	srv = proxy.NewServer(proxy.ServerConfig{Listen: addr, Advertised: addr}, r, log)
+	srv = proxy.NewServer(proxy.ServerConfig{Listen: addr, Advertised: addr}, r, nil, log)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

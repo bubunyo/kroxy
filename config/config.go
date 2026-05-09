@@ -16,6 +16,13 @@ type Config struct {
 	Upstream   UpstreamConfig `yaml:"upstream"`
 	Resolver   ResolverConfig `yaml:"resolver"`
 	Log        LogConfig      `yaml:"log"`
+	Metrics    MetricsConfig  `yaml:"metrics"`
+}
+
+// MetricsConfig configures the Prometheus metrics endpoint.
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
 }
 
 // UpstreamConfig describes the shared upstream Kafka cluster.
@@ -76,6 +83,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Log.Format == "" {
 		c.Log.Format = "json"
+	}
+	if c.Metrics.Listen == "" {
+		c.Metrics.Listen = ":9090"
 	}
 }
 

@@ -5,8 +5,10 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/bubunyo/kroxy/auth"
+	"github.com/bubunyo/kroxy/observability"
 	"github.com/bubunyo/kroxy/protocol"
 	"github.com/bubunyo/kroxy/resolver"
 	"github.com/bubunyo/kroxy/upstream"
@@ -38,6 +40,7 @@ type conn struct {
 	nc       net.Conn
 	resolver resolver.Resolver
 	cfg      ServerConfig
+	metrics  *observability.Metrics
 	log      *slog.Logger
 
 	state    connState
@@ -45,8 +48,8 @@ type conn struct {
 	upstream *upstream.Conn
 }
 
-func newConn(ctx context.Context, nc net.Conn, r resolver.Resolver, cfg ServerConfig, log *slog.Logger) *conn {
-	return &conn{ctx: ctx, nc: nc, resolver: r, cfg: cfg, log: log, state: stateAwaitHandshake}
+func newConn(ctx context.Context, nc net.Conn, r resolver.Resolver, cfg ServerConfig, m *observability.Metrics, log *slog.Logger) *conn {
+	return &conn{ctx: ctx, nc: nc, resolver: r, cfg: cfg, metrics: m, log: log, state: stateAwaitHandshake}
 }
 
 func (c *conn) close() {
@@ -74,7 +77,16 @@ func (c *conn) serve() error {
 			return errors.Wrap(err, "serve")
 		}
 		body := frame[hdr.HeaderSize:]
-		if err := c.dispatch(hdr, frame, body); err != nil {
+		start := time.Now()
+		err = c.dispatch(hdr, frame, body)
+		if c.metrics != nil {
+			tenantLabel := c.tenant.ID
+			if tenantLabel == "" {
+				tenantLabel = "_unauth"
+			}
+			c.metrics.ObserveRequest(hdr.APIKey, tenantLabel, time.Since(start))
+		}
+		if err != nil {
 			return errors.Wrap(err, "serve")
 		}
 	}
@@ -148,6 +160,12 @@ func (c *conn) rewriteHandler(apiKey int16) func(hdr protocol.RequestHeader, bod
 		return c.handleEndTxn
 	case protocol.TxnOffsetCommitKey:
 		return c.handleTxnOffsetCommit
+	case protocol.CreateTopicsKey:
+		return c.handleCreateTopics
+	case protocol.DeleteTopicsKey:
+		return c.handleDeleteTopics
+	case protocol.DescribeConfigsKey:
+		return c.handleDescribeConfigs
 	}
 	return nil
 }
@@ -167,6 +185,9 @@ func (c *conn) ensureUpstream() error {
 	}
 	up, err := upstream.Dial(c.ctx, c.tenant)
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.UpstreamErrorTotal.WithLabelValues("dial").Inc()
+		}
 		return errors.Wrap(err, "ensureUpstream")
 	}
 	c.upstream = up
@@ -198,8 +219,8 @@ func (c *conn) handleApiVersions(hdr protocol.RequestHeader, _ []byte) error {
 		{ApiKey: protocol.SyncGroupKey, MinVersion: 0, MaxVersion: 5},
 		{ApiKey: protocol.DescribeGroupsKey, MinVersion: 0, MaxVersion: 5},
 		{ApiKey: protocol.ListGroupsKey, MinVersion: 0, MaxVersion: 4},
-		{ApiKey: protocol.CreateTopicsKey, MinVersion: 0, MaxVersion: 7},
-		{ApiKey: protocol.DeleteTopicsKey, MinVersion: 0, MaxVersion: 6},
+		{ApiKey: protocol.CreateTopicsKey, MinVersion: 0, MaxVersion: 6},
+		{ApiKey: protocol.DeleteTopicsKey, MinVersion: 0, MaxVersion: 5},
 		{ApiKey: protocol.InitProducerIDKey, MinVersion: 0, MaxVersion: 4},
 		{ApiKey: protocol.AddPartitionsToTxnKey, MinVersion: 0, MaxVersion: 4},
 		{ApiKey: protocol.AddOffsetsToTxnKey, MinVersion: 0, MaxVersion: 3},
@@ -257,6 +278,9 @@ func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) e
 
 	tenant, err := c.resolver.Get(c.ctx, creds.Username, creds.Password)
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.ResolverCallsTotal.WithLabelValues("unauthorized").Inc()
+		}
 		resp.ErrorCode = errSaslAuthFailed
 		msg := "authentication failed"
 		resp.ErrorMessage = &msg
@@ -264,6 +288,9 @@ func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) e
 		return c.writeResponse(hdr, resp)
 	}
 
+	if c.metrics != nil {
+		c.metrics.ResolverCallsTotal.WithLabelValues("ok").Inc()
+	}
 	c.tenant = tenant
 	c.state = stateAuthenticated
 	c.log.InfoContext(c.ctx, "sasl auth ok", "username", creds.Username, "tenant_id", tenant.ID)
