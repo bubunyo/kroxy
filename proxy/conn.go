@@ -260,11 +260,12 @@ func (c *conn) handleSaslHandshake(hdr protocol.RequestHeader, body []byte) erro
 	resp := kmsg.NewPtrSASLHandshakeResponse()
 	resp.SetVersion(hdr.APIVersion)
 	resp.SupportedMechanisms = []string{auth.MechanismPlain}
-	if c.state != stateAwaitHandshake {
+	switch {
+	case c.state != stateAwaitHandshake:
 		resp.ErrorCode = errIllegalSaslState
-	} else if req.Mechanism != auth.MechanismPlain {
+	case req.Mechanism != auth.MechanismPlain:
 		resp.ErrorCode = errUnsupportedSaslMech
-	} else {
+	default:
 		c.state = stateAwaitAuth
 	}
 	return c.writeResponse(hdr, resp)
