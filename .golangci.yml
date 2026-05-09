@@ -1,0 +1,66 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - revive
+    - gosec
+    - gocritic
+    - ineffassign
+    - unused
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        # var-naming intentionally disabled: we mirror Kafka's wire-protocol
+        # identifiers (e.g. ApiVersionsKey) which conflict with Go's "API"
+        # capitalisation convention.
+    gosec:
+      excludes:
+        - G115 # intentional signed/unsigned conversions for Kafka wire format
+        - G109 # int->int16/32 narrowing on validated port numbers
+        - G304 # config loader reads a user-supplied path by design
+        - G404 # weak RNG — fine in tests/fakes
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - revive
+      - path: integration/
+        linters:
+          - gosec
+          - errcheck
+          - revive
+
+formatters:
+  enable:
+    - gofmt
