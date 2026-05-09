@@ -4,7 +4,7 @@
 # Build:   docker build -t kroxy:dev -f dockerfiles/Dockerfile .
 # Run:     docker run --rm -p 9092:9092 -p 9090:9090 -v $PWD/config.yaml:/etc/kroxy/config.yaml kroxy:dev
 
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # Cache deps separately for faster rebuilds.
