@@ -102,6 +102,40 @@ func (c *Conn) RoundTrip(reqFrame []byte, clientCorrelationID int32, headerVersi
 	return respFrame, nil
 }
 
+// RoundTripRequest sends a typed request to the upstream broker and returns
+// the response payload positioned AFTER the response header (i.e. ready to
+// be passed to a kmsg.Response.ReadFrom). The caller's clientID is
+// propagated so the upstream sees a faithful client identifier.
+//
+// Correlation IDs are private to the upstream connection; the caller does
+// not supply one and never sees it.
+func (c *Conn) RoundTripRequest(req kmsg.Request, clientID string) ([]byte, error) {
+	apiKey := req.Key()
+	apiVersion := req.GetVersion()
+	cid := c.nextCorrelationID()
+	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientID))
+	frameWithLen := formatter.AppendRequest(nil, req, cid)
+	if _, err := c.nc.Write(frameWithLen); err != nil {
+		return nil, errors.Wrap(err, "RoundTripRequest")
+	}
+	respFrame, err := protocol.ReadFrame(c.nc)
+	if err != nil {
+		return nil, errors.Wrap(err, "RoundTripRequest")
+	}
+	if len(respFrame) < 4 {
+		return nil, errors.New("RoundTripRequest: short response")
+	}
+	gotCID := int32(binary.BigEndian.Uint32(respFrame[0:4]))
+	if gotCID != cid {
+		return nil, errors.Errorf("RoundTripRequest: correlation id mismatch: want %d got %d", cid, gotCID)
+	}
+	off := 4
+	if protocol.ResponseHeaderVersion(apiKey, apiVersion) >= 1 {
+		off++
+	}
+	return respFrame[off:], nil
+}
+
 // handshake performs ApiVersions then SaslHandshake then SaslAuthenticate
 // against the upstream broker using the supplied PLAIN credentials.
 func (c *Conn) handshake(creds resolver.SASLCreds) error {

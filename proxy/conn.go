@@ -96,8 +96,50 @@ func (c *conn) dispatch(hdr protocol.RequestHeader, frame, body []byte) error {
 			c.log.WarnContext(c.ctx, "request before auth", "api_key", hdr.APIKey)
 			return errors.Errorf("client sent api key %d before authentication", hdr.APIKey)
 		}
+		if c.rewriteHandler(hdr.APIKey) != nil {
+			return c.forwardRewritten(hdr, body)
+		}
 		return c.forwardPassthrough(hdr, frame)
 	}
+}
+
+// rewriteHandler returns a function that performs the request/response
+// rewrite cycle for apiKey, or nil if the proxy currently treats apiKey as
+// pure byte-passthrough.
+func (c *conn) rewriteHandler(apiKey int16) func(hdr protocol.RequestHeader, body []byte) error {
+	switch apiKey {
+	case protocol.MetadataKey:
+		return c.handleMetadata
+	case protocol.ProduceKey:
+		return c.handleProduce
+	case protocol.FetchKey:
+		return c.handleFetch
+	case protocol.ListOffsetsKey:
+		return c.handleListOffsets
+	}
+	return nil
+}
+
+// forwardRewritten dispatches to the per-API rewrite handler.
+func (c *conn) forwardRewritten(hdr protocol.RequestHeader, body []byte) error {
+	if err := c.ensureUpstream(); err != nil {
+		return errors.Wrap(err, "forwardRewritten")
+	}
+	h := c.rewriteHandler(hdr.APIKey)
+	return h(hdr, body)
+}
+
+func (c *conn) ensureUpstream() error {
+	if c.upstream != nil {
+		return nil
+	}
+	up, err := upstream.Dial(c.ctx, c.tenant)
+	if err != nil {
+		return errors.Wrap(err, "ensureUpstream")
+	}
+	c.upstream = up
+	c.log.InfoContext(c.ctx, "upstream connected", "addr", c.tenant.Upstream, "tenant_id", c.tenant.ID)
+	return nil
 }
 
 func (c *conn) handleApiVersions(hdr protocol.RequestHeader, _ []byte) error {
@@ -111,10 +153,10 @@ func (c *conn) handleApiVersions(hdr protocol.RequestHeader, _ []byte) error {
 		// generous ranges so franz-go and other clients pick versions the
 		// upstream broker can handle. The upstream broker will reject any
 		// unsupported version itself.
-		{ApiKey: protocol.ProduceKey, MinVersion: 0, MaxVersion: 11},
-		{ApiKey: protocol.FetchKey, MinVersion: 0, MaxVersion: 16},
-		{ApiKey: protocol.ListOffsetsKey, MinVersion: 0, MaxVersion: 8},
-		{ApiKey: protocol.MetadataKey, MinVersion: 0, MaxVersion: 12},
+		{ApiKey: protocol.ProduceKey, MinVersion: 0, MaxVersion: 9},
+		{ApiKey: protocol.FetchKey, MinVersion: 0, MaxVersion: 11},
+		{ApiKey: protocol.ListOffsetsKey, MinVersion: 0, MaxVersion: 7},
+		{ApiKey: protocol.MetadataKey, MinVersion: 0, MaxVersion: 9},
 		{ApiKey: protocol.OffsetCommitKey, MinVersion: 0, MaxVersion: 9},
 		{ApiKey: protocol.OffsetFetchKey, MinVersion: 0, MaxVersion: 9},
 		{ApiKey: protocol.FindCoordinatorKey, MinVersion: 0, MaxVersion: 4},
@@ -200,13 +242,8 @@ func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) e
 // (modulo correlation-id substitution) and writes the response back to the
 // client. The upstream connection is dialled lazily.
 func (c *conn) forwardPassthrough(hdr protocol.RequestHeader, frame []byte) error {
-	if c.upstream == nil {
-		up, err := upstream.Dial(c.ctx, c.tenant)
-		if err != nil {
-			return errors.Wrap(err, "forwardPassthrough")
-		}
-		c.upstream = up
-		c.log.InfoContext(c.ctx, "upstream connected", "addr", c.tenant.Upstream, "tenant_id", c.tenant.ID)
+	if err := c.ensureUpstream(); err != nil {
+		return errors.Wrap(err, "forwardPassthrough")
 	}
 	respFrame, err := c.upstream.RoundTrip(
 		frame,
