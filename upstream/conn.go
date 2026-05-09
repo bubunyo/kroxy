@@ -11,7 +11,6 @@ import (
 
 	"github.com/bubunyo/kroxy/auth"
 	"github.com/bubunyo/kroxy/protocol"
-	"github.com/bubunyo/kroxy/resolver"
 	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -45,11 +44,13 @@ func (c *Conn) applyRequestDeadline() error {
 	return c.nc.SetDeadline(time.Now().Add(c.reqTO))
 }
 
-// Dial opens a TCP connection to tenant.Upstream and performs the SASL/PLAIN
-// handshake using tenant.UpstreamSASL.
-func Dial(ctx context.Context, tenant resolver.Tenant) (*Conn, error) {
+// Dial opens a TCP connection to addr and performs the SASL/PLAIN
+// handshake using the supplied credentials. The credentials are forwarded
+// verbatim — kroxy does not validate them; the upstream broker is the auth
+// authority.
+func Dial(ctx context.Context, addr, username, password string) (*Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
-	nc, err := d.DialContext(ctx, "tcp", tenant.Upstream)
+	nc, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, errors.Wrap(err, "Dial")
 	}
@@ -59,7 +60,7 @@ func Dial(ctx context.Context, tenant resolver.Tenant) (*Conn, error) {
 		_ = nc.Close()
 		return nil, errors.Wrap(err, "Dial")
 	}
-	if err := c.handshake(tenant.UpstreamSASL); err != nil {
+	if err := c.handshake(username, password); err != nil {
 		_ = nc.Close()
 		return nil, errors.Wrap(err, "Dial")
 	}
@@ -159,19 +160,13 @@ func (c *Conn) RoundTripRequest(req kmsg.Request, clientID string) ([]byte, erro
 }
 
 // handshake performs ApiVersions then SaslHandshake then SaslAuthenticate
-// against the upstream broker using the supplied PLAIN credentials. If the
-// credentials are empty (both username and password) the SASL handshake is
-// skipped — useful for plaintext upstreams in tests / dev.
-func (c *Conn) handshake(creds resolver.SASLCreds) error {
+// against the upstream broker using the supplied PLAIN credentials.
+func (c *Conn) handshake(username, password string) error {
 	// 1. ApiVersions v0 (smallest, broadest compat).
 	avReq := kmsg.NewPtrApiVersionsRequest()
 	avReq.SetVersion(0)
 	if _, err := c.directRoundTrip(avReq, protocol.ApiVersionsKey, 0); err != nil {
 		return errors.Wrap(err, "handshake")
-	}
-
-	if creds.Username == "" && creds.Password == "" {
-		return nil
 	}
 
 	// 2. SaslHandshake v1 — selects mechanism PLAIN.
@@ -191,10 +186,10 @@ func (c *Conn) handshake(creds resolver.SASLCreds) error {
 		return errors.Errorf("handshake: upstream SaslHandshake error code %d", hsResp.ErrorCode)
 	}
 
-	// 3. SaslAuthenticate v1 — send the PLAIN payload.
+	// 3. SaslAuthenticate v1 — forward the client's PLAIN credentials.
 	authReq := kmsg.NewPtrSASLAuthenticateRequest()
 	authReq.SetVersion(1)
-	authReq.SASLAuthBytes = []byte("\x00" + creds.Username + "\x00" + creds.Password)
+	authReq.SASLAuthBytes = []byte("\x00" + username + "\x00" + password)
 	authRespBody, err := c.directRoundTrip(authReq, protocol.SaslAuthenticateKey, 1)
 	if err != nil {
 		return errors.Wrap(err, "handshake")

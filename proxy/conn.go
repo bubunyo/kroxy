@@ -45,6 +45,8 @@ type conn struct {
 
 	state    connState
 	tenant   resolver.Tenant
+	username string
+	password string
 	upstream *upstream.Conn
 }
 
@@ -201,7 +203,7 @@ func (c *conn) ensureUpstream() error {
 	if c.upstream != nil {
 		return nil
 	}
-	up, err := upstream.Dial(c.ctx, c.tenant)
+	up, err := upstream.Dial(c.ctx, c.tenant.Upstream, c.username, c.password)
 	if err != nil {
 		if c.metrics != nil {
 			c.metrics.UpstreamErrorTotal.WithLabelValues("dial").Inc()
@@ -295,7 +297,10 @@ func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) e
 		return c.writeResponse(hdr, resp)
 	}
 
-	tenant, err := c.resolver.Get(c.ctx, creds.Username, creds.Password)
+	// kroxy is a SASL/PLAIN pass-through. The username selects the
+	// tenant; the password is forwarded verbatim to the tenant's upstream
+	// Kafka cluster on the first dial. The upstream is the auth authority.
+	tenant, err := c.resolver.Get(c.ctx, creds.Username)
 	if err != nil {
 		if c.metrics != nil {
 			c.metrics.ResolverCallsTotal.WithLabelValues("unauthorized").Inc()
@@ -311,6 +316,8 @@ func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) e
 		c.metrics.ResolverCallsTotal.WithLabelValues("ok").Inc()
 	}
 	c.tenant = tenant
+	c.username = creds.Username
+	c.password = creds.Password
 	c.state = stateAuthenticated
 	c.log.InfoContext(c.ctx, "sasl auth ok", "username", creds.Username, "tenant_id", tenant.ID)
 	return c.writeResponse(hdr, resp)

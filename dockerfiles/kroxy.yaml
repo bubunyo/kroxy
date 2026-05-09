@@ -7,19 +7,13 @@ upstream:
 resolver:
   users:
     - username: tenantA
-      password: tenantApw
       tenant_id: tenantA
       topic_prefix: "tenantA."
-      upstream_sasl:
-        username: kroxy
-        password: kroxypw
+      upstream: "kafka:9093"
     - username: tenantB
-      password: tenantBpw
       tenant_id: tenantB
       topic_prefix: "tenantB."
-      upstream_sasl:
-        username: kroxy
-        password: kroxypw
+      upstream: "kafka:9093"
 
 log:
   level: info

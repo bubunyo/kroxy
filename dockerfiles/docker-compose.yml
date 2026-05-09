@@ -1,13 +1,16 @@
 # Demo stack:
 #   - kafka:   single-node Apache Kafka in KRaft mode, SASL/PLAIN over PLAINTEXT
 #              on the internal listener (port 9093) — that is what kroxy talks to.
-#   - kroxy:   the multi-tenant proxy. Clients connect on host port 19092.
+#              The broker declares principals for each tenant (tenantA, tenantB).
+#   - kroxy:   the multi-tenant proxy. Clients connect on host port 19092 with
+#              the tenant's username + password; kroxy forwards both verbatim
+#              to the upstream broker.
 #
 # Usage:
 #   docker compose -f dockerfiles/docker-compose.yml up --build
 #
 # Then connect a Kafka client to localhost:19092 with SASL/PLAIN credentials
-# defined in dockerfiles/kroxy.yaml (e.g. tenantA / tenantApw).
+# defined in dockerfiles/kafka_jaas.conf (e.g. tenantA / tenantApw).
 services:
   kafka:
     image: apache/kafka:3.8.0
@@ -28,7 +31,8 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      # JAAS config that defines the upstream credentials kroxy presents.
+      # JAAS config that declares the tenant principals the broker accepts;
+      # kroxy forwards each client's PLAIN credentials verbatim to the broker.
       KAFKA_OPTS: >-
         -Djava.security.auth.login.config=/etc/kafka/kafka_jaas.conf
       CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw

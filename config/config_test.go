@@ -36,12 +36,8 @@ upstream:
 resolver:
   users:
     - username: alice
-      password: alicepw
       tenant_id: tenantA
       topic_prefix: "tenantA."
-      upstream_sasl:
-        username: kroxy
-        password: kroxypw
 `,
 			check: func(t *testing.T, c config.Config) {
 				assert.Equal(t, ":9092", c.Listen)

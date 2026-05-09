@@ -19,7 +19,7 @@ import (
 func startTestServer(t *testing.T) (string, func()) {
 	t.Helper()
 	r, err := resolver.NewMemory([]resolver.MemoryUser{
-		{Username: "alice", Password: "alicepw", TenantID: "tenantA", TopicPrefix: "tenantA.", Upstream: "kafka:9092"},
+		{Username: "alice", TenantID: "tenantA", TopicPrefix: "tenantA.", Upstream: "kafka:9092"},
 	})
 	require.NoError(t, err)
 
@@ -130,7 +130,10 @@ func TestM1_ApiVersionsThenSaslPlain(t *testing.T) {
 	assert.Equal(t, int16(0), authResp.ErrorCode, "expected auth ok, got msg=%v", strOrNil(authResp.ErrorMessage))
 }
 
-func TestM1_BadPasswordFails(t *testing.T) {
+// TestM1_AnyPasswordAccepted asserts kroxy v1 ignores the SASL/PLAIN
+// password byte field; auth succeeds for a known username regardless of the
+// password value supplied by the client.
+func TestM1_AnyPasswordAccepted(t *testing.T) {
 	t.Parallel()
 
 	addr, stop := startTestServer(t)
@@ -151,7 +154,39 @@ func TestM1_BadPasswordFails(t *testing.T) {
 
 	authReq := kmsg.NewPtrSASLAuthenticateRequest()
 	authReq.SetVersion(1)
-	authReq.SASLAuthBytes = []byte("\x00alice\x00wrong")
+	authReq.SASLAuthBytes = []byte("\x00alice\x00literally-anything")
+	sendRequest(t, c, authReq, 2, "test")
+
+	authResp := kmsg.NewPtrSASLAuthenticateResponse()
+	authResp.SetVersion(1)
+	_ = recvResponse(t, c, authResp, protocol.SaslAuthenticateKey, 1)
+	assert.Equal(t, int16(0), authResp.ErrorCode, "expected auth ok, got msg=%v", strOrNil(authResp.ErrorMessage))
+}
+
+// TestM1_UnknownUserFails asserts auth fails when the username is not in
+// the resolver, even if the password field is non-empty.
+func TestM1_UnknownUserFails(t *testing.T) {
+	t.Parallel()
+
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	c, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	defer c.Close()
+	require.NoError(t, c.SetDeadline(time.Now().Add(3*time.Second)))
+
+	hsReq := kmsg.NewPtrSASLHandshakeRequest()
+	hsReq.SetVersion(1)
+	hsReq.Mechanism = "PLAIN"
+	sendRequest(t, c, hsReq, 1, "test")
+	hsResp := kmsg.NewPtrSASLHandshakeResponse()
+	hsResp.SetVersion(1)
+	_ = recvResponse(t, c, hsResp, protocol.SaslHandshakeKey, 1)
+
+	authReq := kmsg.NewPtrSASLAuthenticateRequest()
+	authReq.SetVersion(1)
+	authReq.SASLAuthBytes = []byte("\x00ghost\x00anything")
 	sendRequest(t, c, authReq, 2, "test")
 
 	authResp := kmsg.NewPtrSASLAuthenticateResponse()

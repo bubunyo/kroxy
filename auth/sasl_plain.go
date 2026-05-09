@@ -6,11 +6,16 @@
 package auth
 
 import (
+	"fmt"
+	"log/slog"
+
 	"github.com/pkg/errors"
 )
 
 // MechanismPlain is the only mechanism advertised and accepted by the proxy.
 const MechanismPlain = "PLAIN"
+
+const redacted = "[REDACTED]"
 
 // PlainCredentials are the (authzid, authcid, password) tuple decoded from a
 // SASL/PLAIN authentication payload.
@@ -18,6 +23,26 @@ type PlainCredentials struct {
 	Authzid  string
 	Username string
 	Password string
+}
+
+// String implements fmt.Stringer with the password redacted.
+func (p PlainCredentials) String() string {
+	return fmt.Sprintf("PlainCredentials{Authzid:%q Username:%q Password:%s}",
+		p.Authzid, p.Username, redacted)
+}
+
+// GoString implements fmt.GoStringer so %#v is also safe.
+func (p PlainCredentials) GoString() string { return p.String() }
+
+// LogValue implements slog.LogValuer so structured logs never expose the
+// password. kroxy forwards the password verbatim to the upstream broker but
+// must never log it.
+func (p PlainCredentials) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("authzid", p.Authzid),
+		slog.String("username", p.Username),
+		slog.String("password", redacted),
+	)
 }
 
 // ParsePlain decodes the SASL/PLAIN payload, which is:

@@ -238,10 +238,9 @@ func startTestServerWithUpstream(t *testing.T, upstreamAddr string) (string, fun
 	t.Helper()
 	r, err := resolver.NewMemory([]resolver.MemoryUser{
 		{
-			Username: "alice", Password: "alicepw",
+			Username: "alice",
 			TenantID: "tenantA", TopicPrefix: "tenantA.",
-			Upstream:     upstreamAddr,
-			UpstreamSASL: resolver.SASLCreds{Username: "kroxy", Password: "kroxypw"},
+			Upstream: upstreamAddr,
 		},
 	})
 	require.NoError(t, err)
@@ -328,12 +327,12 @@ func TestM2_PassthroughForwardsAndRewritesCorrelationID(t *testing.T) {
 	}
 	assert.Equal(t, []byte("PING"), frame[off:])
 
-	// Verify the upstream actually saw an OffsetForLeaderEpoch request and that
-	// we sent PLAIN credentials to it (not the client's).
+	// Verify the upstream actually saw an OffsetForLeaderEpoch request and
+	// that the client's PLAIN credentials were forwarded verbatim.
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	assert.Contains(t, broker.gotKeys, protocol.OffsetForLeaderEpoch)
-	assert.Equal(t, "\x00kroxy\x00kroxypw", broker.gotCreds)
+	assert.Equal(t, "\x00alice\x00alicepw", broker.gotCreds)
 }
 
 func TestM2_RequestBeforeAuthIsRejected(t *testing.T) {

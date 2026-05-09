@@ -13,12 +13,10 @@ import (
 
 func sampleUser(name string) resolver.MemoryUser {
 	return resolver.MemoryUser{
-		Username:     name,
-		Password:     name + "pw",
-		TenantID:     name,
-		TopicPrefix:  name + ".",
-		Upstream:     "kafka:9092",
-		UpstreamSASL: resolver.SASLCreds{Username: "kroxy", Password: "kroxypw"},
+		Username:    name,
+		TenantID:    name,
+		TopicPrefix: name + ".",
+		Upstream:    "kafka:9092",
 	}
 }
 
@@ -31,31 +29,21 @@ func TestMemory_Get(t *testing.T) {
 	tests := []struct {
 		name     string
 		username string
-		password string
 		wantErr  error
 		want     resolver.Tenant
 	}{
 		{
-			name:     "valid credentials",
+			name:     "known user",
 			username: "alice",
-			password: "alicepw",
 			want: resolver.Tenant{
-				ID:           "alice",
-				TopicPrefix:  "alice.",
-				Upstream:     "kafka:9092",
-				UpstreamSASL: resolver.SASLCreds{Username: "kroxy", Password: "kroxypw"},
+				ID:          "alice",
+				TopicPrefix: "alice.",
+				Upstream:    "kafka:9092",
 			},
-		},
-		{
-			name:     "wrong password",
-			username: "alice",
-			password: "nope",
-			wantErr:  resolver.ErrUnauthorized,
 		},
 		{
 			name:     "unknown user",
 			username: "ghost",
-			password: "x",
 			wantErr:  resolver.ErrUnauthorized,
 		},
 	}
@@ -63,7 +51,7 @@ func TestMemory_Get(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := m.Get(context.Background(), tt.username, tt.password)
+			got, err := m.Get(context.Background(), tt.username)
 			if tt.wantErr != nil {
 				require.Error(t, err)
 				assert.True(t, errors.Is(err, tt.wantErr))
@@ -107,41 +95,9 @@ func TestMemory_Set(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
 
-	tenant, err := m.Get(context.Background(), "alice", "alicepw")
+	tenant, err := m.Get(context.Background(), "alice")
 	require.NoError(t, err)
 	assert.Equal(t, "alice", tenant.ID)
-}
-
-func TestMemory_Update(t *testing.T) {
-	t.Parallel()
-	m, err := resolver.NewMemory([]resolver.MemoryUser{sampleUser("alice")})
-	require.NoError(t, err)
-
-	newPw := "newpw"
-	newPrefix := "alpha."
-	require.NoError(t, m.Update(context.Background(), resolver.UserPatch{
-		Username:    "alice",
-		Password:    &newPw,
-		TopicPrefix: &newPrefix,
-	}))
-
-	tenant, err := m.Get(context.Background(), "alice", newPw)
-	require.NoError(t, err)
-	assert.Equal(t, "alpha.", tenant.TopicPrefix)
-	assert.Equal(t, "alice", tenant.ID, "TenantID should be unchanged after partial update")
-
-	err = m.Update(context.Background(), resolver.UserPatch{Username: "ghost"})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrNotFound))
-
-	err = m.Update(context.Background(), resolver.UserPatch{})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
-
-	empty := ""
-	err = m.Update(context.Background(), resolver.UserPatch{Username: "alice", Password: &empty})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
 }
 
 func TestMemory_Delete(t *testing.T) {
@@ -151,7 +107,7 @@ func TestMemory_Delete(t *testing.T) {
 
 	require.NoError(t, m.Delete(context.Background(), "alice"))
 
-	_, err = m.Get(context.Background(), "alice", "alicepw")
+	_, err = m.Get(context.Background(), "alice")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrUnauthorized))
 
@@ -164,7 +120,7 @@ func TestMemory_Delete(t *testing.T) {
 	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
 }
 
-func TestMemory_List_NoPasswordsAndDetached(t *testing.T) {
+func TestMemory_List_Detached(t *testing.T) {
 	t.Parallel()
 	m, err := resolver.NewMemory([]resolver.MemoryUser{
 		sampleUser("alice"),
@@ -207,7 +163,7 @@ func TestMemory_ConcurrentReadDuringWrite(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_, _ = m.Get(ctx, "alice", "alicepw")
+					_, _ = m.Get(ctx, "alice")
 					_, _ = m.List(ctx)
 				}
 			}

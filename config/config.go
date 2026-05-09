@@ -46,20 +46,14 @@ type ResolverConfig struct {
 	Users []UserConfig `yaml:"users"`
 }
 
-// UserConfig is a single tenant credential entry.
+// UserConfig is a single tenant entry. kroxy stores no client secrets;
+// the SASL/PLAIN username is the tenant selector and the password is
+// forwarded verbatim to the tenant's upstream Kafka cluster.
 type UserConfig struct {
-	Username     string     `yaml:"username"`
-	Password     string     `yaml:"password"`
-	TenantID     string     `yaml:"tenant_id"`
-	TopicPrefix  string     `yaml:"topic_prefix"`
-	Upstream     string     `yaml:"upstream"`
-	UpstreamSASL SASLConfig `yaml:"upstream_sasl"`
-}
-
-// SASLConfig is a SASL/PLAIN credential pair.
-type SASLConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Username    string `yaml:"username"`
+	TenantID    string `yaml:"tenant_id"`
+	TopicPrefix string `yaml:"topic_prefix"`
+	Upstream    string `yaml:"upstream"`
 }
 
 // LogConfig configures the slog handler.
@@ -117,9 +111,6 @@ func (c *Config) validate() error {
 		if u.Username == "" {
 			return errors.Errorf("config: resolver.users[%d].username is required", i)
 		}
-		if u.Password == "" {
-			return errors.Errorf("config: resolver.users[%d].password is required", i)
-		}
 		if u.TenantID == "" {
 			return errors.Errorf("config: resolver.users[%d].tenant_id is required", i)
 		}
@@ -145,14 +136,9 @@ func (c *Config) MemoryUsers() []resolver.MemoryUser {
 		}
 		out[i] = resolver.MemoryUser{
 			Username:    u.Username,
-			Password:    u.Password,
 			TenantID:    u.TenantID,
 			TopicPrefix: u.TopicPrefix,
 			Upstream:    upstream,
-			UpstreamSASL: resolver.SASLCreds{
-				Username: u.UpstreamSASL.Username,
-				Password: u.UpstreamSASL.Password,
-			},
 		}
 	}
 	return out
