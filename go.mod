@@ -3,6 +3,7 @@ module github.com/bubunyo/kroxy
 go 1.25.6
 
 require (
+	github.com/bubunyo/go-rpc v0.0.3
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1

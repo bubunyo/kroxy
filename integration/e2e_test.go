@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bubunyo/kroxy/admin"
 	"github.com/bubunyo/kroxy/observability"
 	"github.com/bubunyo/kroxy/proxy"
 	"github.com/bubunyo/kroxy/resolver"
@@ -235,4 +236,116 @@ func TestEndToEnd_TenantIsolation(t *testing.T) {
 		assert.NotContains(t, *top.Topic, tenantA+".",
 			"tenant B leaked tenant A's topic: %s", *top.Topic)
 	}
+}
+
+// TestEndToEnd_AdminSetThenAuth boots Kafka + kroxy with an empty resolver,
+// uses the admin RPC to register a brand-new tenant, then SASL-authenticates
+// a client with those credentials and produces a record.
+func TestEndToEnd_AdminSetThenAuth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	kc, err := tckafka.Run(ctx, "confluentinc/cp-kafka:7.7.0",
+		tckafka.WithClusterID("integration-admin-cluster"),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = kc.Terminate(context.Background()) })
+
+	brokers, err := kc.Brokers(ctx)
+	require.NoError(t, err)
+	upstream := brokers[0]
+
+	store, err := resolver.NewMemory(nil)
+	require.NoError(t, err)
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Reserve proxy + admin ports.
+	pl, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	proxyAddr := pl.Addr().String()
+	require.NoError(t, pl.Close())
+
+	al, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	adminAddr := al.Addr().String()
+	require.NoError(t, al.Close())
+
+	srv := proxy.NewServer(proxy.ServerConfig{Listen: proxyAddr, Advertised: proxyAddr}, store, observability.NewMetrics(), log)
+	pCtx, pCancel := context.WithCancel(ctx)
+	defer pCancel()
+
+	proxyDone := make(chan struct{})
+	go func() {
+		_ = srv.Run(pCtx)
+		close(proxyDone)
+	}()
+	t.Cleanup(func() {
+		pCancel()
+		srv.Wait()
+		<-proxyDone
+	})
+
+	adminDone := make(chan struct{})
+	go func() {
+		_ = admin.Serve(pCtx, adminAddr, admin.NewService(store, log), log)
+		close(adminDone)
+	}()
+	t.Cleanup(func() { <-adminDone })
+
+	require.Eventually(t, func() bool {
+		c, err := net.DialTimeout("tcp", proxyAddr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		_ = c.Close()
+		c2, err := net.DialTimeout("tcp", adminAddr, 100*time.Millisecond)
+		if err != nil {
+			return false
+		}
+		_ = c2.Close()
+		return true
+	}, 3*time.Second, 25*time.Millisecond, "proxy + admin should be up")
+
+	client := admin.NewClient("http://" + adminAddr + "/rpc")
+	require.NoError(t, client.Set(ctx, admin.SetParams{
+		Username:    "carol",
+		Password:    "carolpw",
+		TenantID:    "tenantC",
+		TopicPrefix: "tenantC.",
+		Upstream:    upstream,
+	}))
+
+	listed, err := client.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, listed.Tenants, 1)
+	assert.Equal(t, "carol", listed.Tenants[0].Username)
+
+	prod := newClient(t, proxyAddr, "carol", "carolpw",
+		kgo.AllowAutoTopicCreation(),
+		kgo.DefaultProduceTopic("admin-events"),
+	)
+	defer prod.Close()
+	require.NoError(t, prod.ProduceSync(ctx,
+		&kgo.Record{Value: []byte("hello-from-carol")}).FirstErr())
+
+	// Verify the topic landed under the prefix on the broker.
+	direct, err := kgo.NewClient(
+		kgo.SeedBrokers(upstream),
+		kgo.MetadataMinAge(100*time.Millisecond),
+	)
+	require.NoError(t, err)
+	defer direct.Close()
+
+	mdReq := kmsg.NewPtrMetadataRequest()
+	mdResp, err := mdReq.RequestWith(ctx, direct)
+	require.NoError(t, err)
+	var found bool
+	for _, top := range mdResp.Topics {
+		if top.Topic != nil && *top.Topic == "tenantC.admin-events" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected tenantC.admin-events on the broker")
 }

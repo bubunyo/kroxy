@@ -2,6 +2,7 @@
 package config
 
 import (
+	"net"
 	"os"
 
 	"github.com/bubunyo/kroxy/resolver"
@@ -17,10 +18,20 @@ type Config struct {
 	Resolver   ResolverConfig `yaml:"resolver"`
 	Log        LogConfig      `yaml:"log"`
 	Metrics    MetricsConfig  `yaml:"metrics"`
+	Admin      AdminConfig    `yaml:"admin"`
 }
 
 // MetricsConfig configures the Prometheus metrics endpoint.
 type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"`
+}
+
+// AdminConfig configures the JSON-RPC admin endpoint.
+//
+// The endpoint is unauthenticated; bind it to a loopback address (the
+// default) or otherwise gate access at the network layer.
+type AdminConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Listen  string `yaml:"listen"`
 }
@@ -87,6 +98,9 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.Listen == "" {
 		c.Metrics.Listen = ":9090"
 	}
+	if c.Admin.Listen == "" {
+		c.Admin.Listen = "127.0.0.1:9095"
+	}
 }
 
 func (c *Config) validate() error {
@@ -96,8 +110,8 @@ func (c *Config) validate() error {
 	if c.Upstream.Bootstrap == "" {
 		return errors.New("config: upstream.bootstrap is required")
 	}
-	if len(c.Resolver.Users) == 0 {
-		return errors.New("config: resolver.users must contain at least one user")
+	if len(c.Resolver.Users) == 0 && !c.Admin.Enabled {
+		return errors.New("config: resolver.users must contain at least one user (or enable the admin RPC)")
 	}
 	for i, u := range c.Resolver.Users {
 		if u.Username == "" {
@@ -111,6 +125,11 @@ func (c *Config) validate() error {
 		}
 		if u.TopicPrefix == "" {
 			return errors.Errorf("config: resolver.users[%d].topic_prefix is required", i)
+		}
+	}
+	if c.Admin.Enabled {
+		if _, _, err := net.SplitHostPort(c.Admin.Listen); err != nil {
+			return errors.Wrapf(err, "config: admin.listen is invalid")
 		}
 	}
 	return nil

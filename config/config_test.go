@@ -47,11 +47,51 @@ resolver:
 				assert.Equal(t, ":9092", c.Listen)
 				assert.Equal(t, "info", c.Log.Level)
 				assert.Equal(t, "json", c.Log.Format)
+				assert.Equal(t, "127.0.0.1:9095", c.Admin.Listen)
+				assert.False(t, c.Admin.Enabled)
 				users := c.MemoryUsers()
 				require.Len(t, users, 1)
 				assert.Equal(t, "alice", users[0].Username)
 				assert.Equal(t, "kafka:9092", users[0].Upstream)
 			},
+		},
+		{
+			name: "admin enabled with no users",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+admin:
+  enabled: true
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.True(t, c.Admin.Enabled)
+				assert.Equal(t, "127.0.0.1:9095", c.Admin.Listen)
+				assert.Empty(t, c.MemoryUsers())
+			},
+		},
+		{
+			name: "admin enabled with custom listen",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+admin:
+  enabled: true
+  listen: "0.0.0.0:9099"
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.Equal(t, "0.0.0.0:9099", c.Admin.Listen)
+			},
+		},
+		{
+			name: "admin enabled with invalid listen",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+admin:
+  enabled: true
+  listen: "not-a-host-port"
+`,
+			wantErr: true,
 		},
 		{
 			name:    "missing advertised",

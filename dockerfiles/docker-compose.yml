@@ -52,6 +52,7 @@ services:
     ports:
       - "19092:9092" # client-facing Kafka port
       - "19090:9090" # Prometheus metrics
+      - "19095:9095" # admin JSON-RPC (no auth — see kroxy.yaml warning)
     volumes:
       - ./kroxy.yaml:/etc/kroxy/config.yaml:ro
     command: ["-config", "/etc/kroxy/config.yaml"]

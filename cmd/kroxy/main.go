@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/bubunyo/kroxy/admin"
 	"github.com/bubunyo/kroxy/config"
 	"github.com/bubunyo/kroxy/observability"
 	"github.com/bubunyo/kroxy/proxy"
@@ -60,6 +61,12 @@ func run() error {
 		go func() { metricsErrCh <- observability.ServeMetrics(ctx, cfg.Metrics.Listen, metrics, log) }()
 	}
 
+	adminErrCh := make(chan error, 1)
+	if cfg.Admin.Enabled {
+		svc := admin.NewService(res, log)
+		go func() { adminErrCh <- admin.Serve(ctx, cfg.Admin.Listen, svc, log) }()
+	}
+
 	select {
 	case <-ctx.Done():
 		log.Info("shutdown requested")
@@ -68,6 +75,10 @@ func run() error {
 			return err
 		}
 	case err := <-metricsErrCh:
+		if err != nil {
+			return err
+		}
+	case err := <-adminErrCh:
 		if err != nil {
 			return err
 		}

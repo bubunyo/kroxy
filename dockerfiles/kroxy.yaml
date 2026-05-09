@@ -28,3 +28,10 @@ log:
 metrics:
   enabled: true
   listen: ":9090"
+
+# WARNING: the admin RPC has no authentication in v1. Bind it to a loopback
+# address in production, or otherwise gate access at the network layer.
+# This compose stack publishes the port to the host for demo purposes.
+admin:
+  enabled: true
+  listen: "0.0.0.0:9095"
