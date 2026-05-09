@@ -116,6 +116,38 @@ func (c *conn) rewriteHandler(apiKey int16) func(hdr protocol.RequestHeader, bod
 		return c.handleFetch
 	case protocol.ListOffsetsKey:
 		return c.handleListOffsets
+	case protocol.FindCoordinatorKey:
+		return c.handleFindCoordinator
+	case protocol.OffsetCommitKey:
+		return c.handleOffsetCommit
+	case protocol.OffsetFetchKey:
+		return c.handleOffsetFetch
+	case protocol.OffsetDeleteKey:
+		return c.handleOffsetDelete
+	case protocol.JoinGroupKey:
+		return c.handleJoinGroup
+	case protocol.SyncGroupKey:
+		return c.handleSyncGroup
+	case protocol.HeartbeatKey:
+		return c.handleHeartbeat
+	case protocol.LeaveGroupKey:
+		return c.handleLeaveGroup
+	case protocol.DescribeGroupsKey:
+		return c.handleDescribeGroups
+	case protocol.ListGroupsKey:
+		return c.handleListGroups
+	case protocol.DeleteGroupsKey:
+		return c.handleDeleteGroups
+	case protocol.InitProducerIDKey:
+		return c.handleInitProducerID
+	case protocol.AddPartitionsToTxnKey:
+		return c.handleAddPartitionsToTxn
+	case protocol.AddOffsetsToTxnKey:
+		return c.handleAddOffsetsToTxn
+	case protocol.EndTxnKey:
+		return c.handleEndTxn
+	case protocol.TxnOffsetCommitKey:
+		return c.handleTxnOffsetCommit
 	}
 	return nil
 }

@@ -34,9 +34,16 @@ type fakeBroker struct {
 	// Topics that exist on the (synthetic) upstream cluster. Used by the
 	// Metadata handler to build realistic responses.
 	upstreamTopics []string
+	// Groups that exist on the (synthetic) upstream cluster. Used by the
+	// ListGroups handler.
+	upstreamGroups []string
 	// Last Metadata request the broker saw, post-decode. Useful for
 	// asserting topic-name rewriting on the request leg.
 	lastMetadataTopics []string
+	// Last FindCoordinator key the broker saw, post-decode.
+	lastCoordKey string
+	// Last JoinGroup group ID the broker saw, post-decode.
+	lastJoinGroup string
 }
 
 func newFakeBroker(t *testing.T) *fakeBroker {
@@ -114,6 +121,18 @@ func (b *fakeBroker) handle(c net.Conn) {
 				b.handleMetadata(c, hdr, body)
 				continue
 			}
+			if hdr.APIKey == protocol.FindCoordinatorKey {
+				b.handleFindCoordinator(c, hdr, body)
+				continue
+			}
+			if hdr.APIKey == protocol.JoinGroupKey {
+				b.handleJoinGroup(c, hdr, body)
+				continue
+			}
+			if hdr.APIKey == protocol.ListGroupsKey {
+				b.handleListGroups(c, hdr)
+				continue
+			}
 
 			// Synthesise a fixed payload: response header + 4 bytes "PING".
 			out := protocol.AppendResponseHeader(nil,
@@ -162,6 +181,50 @@ func (b *fakeBroker) handleMetadata(c net.Conn, hdr protocol.RequestHeader, body
 		resp.Topics = append(resp.Topics, t)
 	}
 
+	out := protocol.EncodeResponse(resp, hdr.CorrelationID, hdr.APIKey, hdr.APIVersion)
+	_ = protocol.WriteFrame(c, out)
+}
+
+func (b *fakeBroker) handleFindCoordinator(c net.Conn, hdr protocol.RequestHeader, body []byte) {
+	req := kmsg.NewPtrFindCoordinatorRequest()
+	req.SetVersion(hdr.APIVersion)
+	_ = req.ReadFrom(body)
+	b.mu.Lock()
+	b.lastCoordKey = req.CoordinatorKey
+	b.mu.Unlock()
+
+	resp := kmsg.NewPtrFindCoordinatorResponse()
+	resp.SetVersion(hdr.APIVersion)
+	resp.NodeID = 11
+	resp.Host = "real-broker-1"
+	resp.Port = 9092
+	out := protocol.EncodeResponse(resp, hdr.CorrelationID, hdr.APIKey, hdr.APIVersion)
+	_ = protocol.WriteFrame(c, out)
+}
+
+func (b *fakeBroker) handleJoinGroup(c net.Conn, hdr protocol.RequestHeader, body []byte) {
+	req := kmsg.NewPtrJoinGroupRequest()
+	req.SetVersion(hdr.APIVersion)
+	_ = req.ReadFrom(body)
+	b.mu.Lock()
+	b.lastJoinGroup = req.Group
+	b.mu.Unlock()
+
+	resp := kmsg.NewPtrJoinGroupResponse()
+	resp.SetVersion(hdr.APIVersion)
+	resp.MemberID = "member-1"
+	resp.LeaderID = "member-1"
+	resp.Generation = 1
+	out := protocol.EncodeResponse(resp, hdr.CorrelationID, hdr.APIKey, hdr.APIVersion)
+	_ = protocol.WriteFrame(c, out)
+}
+
+func (b *fakeBroker) handleListGroups(c net.Conn, hdr protocol.RequestHeader) {
+	resp := kmsg.NewPtrListGroupsResponse()
+	resp.SetVersion(hdr.APIVersion)
+	for _, g := range b.upstreamGroups {
+		resp.Groups = append(resp.Groups, kmsg.ListGroupsResponseGroup{Group: g, ProtocolType: "consumer"})
+	}
 	out := protocol.EncodeResponse(resp, hdr.CorrelationID, hdr.APIKey, hdr.APIVersion)
 	_ = protocol.WriteFrame(c, out)
 }
@@ -395,3 +458,94 @@ func TestM3_MetadataRewrite_PrefixesAndStrips(t *testing.T) {
 }
 
 func strPtrM3(s string) *string { return &s }
+
+func TestM4_FindCoordinatorRewritesKeyAndAddress(t *testing.T) {
+	t.Parallel()
+
+	broker := newFakeBroker(t)
+	defer broker.close()
+	addr, stop := startTestServerWithUpstream(t, broker.addr)
+	defer stop()
+
+	c := authenticate(t, addr, "alice", "alicepw")
+	defer c.Close()
+
+	req := kmsg.NewPtrFindCoordinatorRequest()
+	req.SetVersion(2)
+	req.CoordinatorType = 0 // group
+	req.CoordinatorKey = "consumer-1"
+	sendRequest(t, c, req, 7, "test")
+
+	resp := kmsg.NewPtrFindCoordinatorResponse()
+	resp.SetVersion(2)
+	gotCID := recvResponse(t, c, resp, protocol.FindCoordinatorKey, 2)
+	assert.Equal(t, int32(7), gotCID)
+
+	broker.mu.Lock()
+	gotKey := broker.lastCoordKey
+	broker.mu.Unlock()
+	assert.Equal(t, "tenantA.consumer-1", gotKey, "upstream must see prefixed key")
+
+	// Client sees proxy as the coordinator (node 0, advertised host/port).
+	assert.Equal(t, int32(0), resp.NodeID)
+	host, _, err := splitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, host, resp.Host)
+}
+
+func TestM4_JoinGroupPrefixesGroupID(t *testing.T) {
+	t.Parallel()
+
+	broker := newFakeBroker(t)
+	defer broker.close()
+	addr, stop := startTestServerWithUpstream(t, broker.addr)
+	defer stop()
+
+	c := authenticate(t, addr, "alice", "alicepw")
+	defer c.Close()
+
+	req := kmsg.NewPtrJoinGroupRequest()
+	req.SetVersion(2)
+	req.Group = "consumer-1"
+	req.SessionTimeoutMillis = 30000
+	req.ProtocolType = "consumer"
+	sendRequest(t, c, req, 8, "test")
+
+	resp := kmsg.NewPtrJoinGroupResponse()
+	resp.SetVersion(2)
+	_ = recvResponse(t, c, resp, protocol.JoinGroupKey, 2)
+
+	broker.mu.Lock()
+	got := broker.lastJoinGroup
+	broker.mu.Unlock()
+	assert.Equal(t, "tenantA.consumer-1", got)
+}
+
+func TestM4_ListGroupsFiltersAndStrips(t *testing.T) {
+	t.Parallel()
+
+	broker := newFakeBroker(t)
+	broker.upstreamGroups = []string{"tenantA.cg-1", "tenantB.cg-1", "tenantA.cg-2"}
+	defer broker.close()
+	addr, stop := startTestServerWithUpstream(t, broker.addr)
+	defer stop()
+
+	c := authenticate(t, addr, "alice", "alicepw")
+	defer c.Close()
+
+	req := kmsg.NewPtrListGroupsRequest()
+	req.SetVersion(2)
+	sendRequest(t, c, req, 9, "test")
+
+	resp := kmsg.NewPtrListGroupsResponse()
+	resp.SetVersion(2)
+	_ = recvResponse(t, c, resp, protocol.ListGroupsKey, 2)
+
+	require.Len(t, resp.Groups, 2)
+	names := []string{resp.Groups[0].Group, resp.Groups[1].Group}
+	assert.ElementsMatch(t, []string{"cg-1", "cg-2"}, names)
+}
+
+func splitHostPort(addr string) (string, string, error) {
+	return net.SplitHostPort(addr)
+}
