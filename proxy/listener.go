@@ -65,11 +65,7 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 			return pkgerrors.Wrap(err, "Run")
 		}
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.handle(ctx, c)
-		}()
+		s.wg.Go(func() { s.handle(ctx, c) })
 	}
 }
 
@@ -88,7 +84,7 @@ func (s *Server) handle(ctx context.Context, nc net.Conn) {
 
 // drainTimeout is how long the listener waits for in-flight conns to finish
 // after ctx cancellation before returning.
-const drainTimeout = 5 * time.Second
+const drainTimeout = 30 * time.Second
 
 // Wait blocks until all in-flight connections have returned or the drain
 // timeout elapses. Useful in main() after Run exits.

@@ -9,6 +9,7 @@ import (
 	"github.com/bubunyo/kroxy/auth"
 	"github.com/bubunyo/kroxy/protocol"
 	"github.com/bubunyo/kroxy/resolver"
+	"github.com/bubunyo/kroxy/upstream"
 	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -18,11 +19,9 @@ var errClientClosed = errors.New("client closed connection")
 
 // Kafka error codes used by the proxy itself before any upstream is involved.
 const (
-	errSaslAuthFailed         int16 = 58
-	errUnsupportedSaslMech    int16 = 33
-	errIllegalSaslState       int16 = 34
-	errUnsupportedVersion     int16 = 35
-	errUnsupportedKafkaServer int16 = 35
+	errSaslAuthFailed      int16 = 58
+	errUnsupportedSaslMech int16 = 33
+	errIllegalSaslState    int16 = 34
 )
 
 // connState tracks the per-connection authentication phase.
@@ -41,15 +40,21 @@ type conn struct {
 	cfg      ServerConfig
 	log      *slog.Logger
 
-	state  connState
-	tenant resolver.Tenant
+	state    connState
+	tenant   resolver.Tenant
+	upstream *upstream.Conn
 }
 
 func newConn(ctx context.Context, nc net.Conn, r resolver.Resolver, cfg ServerConfig, log *slog.Logger) *conn {
 	return &conn{ctx: ctx, nc: nc, resolver: r, cfg: cfg, log: log, state: stateAwaitHandshake}
 }
 
-func (c *conn) close() { _ = c.nc.Close() }
+func (c *conn) close() {
+	_ = c.nc.Close()
+	if c.upstream != nil {
+		_ = c.upstream.Close()
+	}
+}
 
 // serve runs the per-connection request/response loop.
 func (c *conn) serve() error {
@@ -69,16 +74,16 @@ func (c *conn) serve() error {
 			return errors.Wrap(err, "serve")
 		}
 		body := frame[hdr.HeaderSize:]
-		if err := c.dispatch(hdr, body); err != nil {
+		if err := c.dispatch(hdr, frame, body); err != nil {
 			return errors.Wrap(err, "serve")
 		}
 	}
 }
 
-// dispatch handles a single request. In M1 only ApiVersions, SaslHandshake
-// and SaslAuthenticate are answered; any other API key is rejected with an
-// error response while the upstream pipe is being built.
-func (c *conn) dispatch(hdr protocol.RequestHeader, body []byte) error {
+// dispatch handles a single request. SASL-related keys are terminated at
+// the proxy. All other authenticated traffic is forwarded as raw bytes to
+// the upstream connection (no body rewriting yet — that lands in M3+).
+func (c *conn) dispatch(hdr protocol.RequestHeader, frame, body []byte) error {
 	switch hdr.APIKey {
 	case protocol.ApiVersionsKey:
 		return c.handleApiVersions(hdr, body)
@@ -87,9 +92,11 @@ func (c *conn) dispatch(hdr protocol.RequestHeader, body []byte) error {
 	case protocol.SaslAuthenticateKey:
 		return c.handleSaslAuthenticate(hdr, body)
 	default:
-		// In M1 we have no upstream yet. Reject with UNSUPPORTED_VERSION
-		// so the client surfaces a clear error rather than hanging.
-		return c.rejectNotImplemented(hdr)
+		if c.state != stateAuthenticated {
+			c.log.WarnContext(c.ctx, "request before auth", "api_key", hdr.APIKey)
+			return errors.Errorf("client sent api key %d before authentication", hdr.APIKey)
+		}
+		return c.forwardPassthrough(hdr, frame)
 	}
 }
 
@@ -100,6 +107,33 @@ func (c *conn) handleApiVersions(hdr protocol.RequestHeader, _ []byte) error {
 		{ApiKey: protocol.ApiVersionsKey, MinVersion: 0, MaxVersion: 3},
 		{ApiKey: protocol.SaslHandshakeKey, MinVersion: 0, MaxVersion: 1},
 		{ApiKey: protocol.SaslAuthenticateKey, MinVersion: 0, MaxVersion: 2},
+		// Once authenticated, every other key is byte-passthrough; advertise
+		// generous ranges so franz-go and other clients pick versions the
+		// upstream broker can handle. The upstream broker will reject any
+		// unsupported version itself.
+		{ApiKey: protocol.ProduceKey, MinVersion: 0, MaxVersion: 11},
+		{ApiKey: protocol.FetchKey, MinVersion: 0, MaxVersion: 16},
+		{ApiKey: protocol.ListOffsetsKey, MinVersion: 0, MaxVersion: 8},
+		{ApiKey: protocol.MetadataKey, MinVersion: 0, MaxVersion: 12},
+		{ApiKey: protocol.OffsetCommitKey, MinVersion: 0, MaxVersion: 9},
+		{ApiKey: protocol.OffsetFetchKey, MinVersion: 0, MaxVersion: 9},
+		{ApiKey: protocol.FindCoordinatorKey, MinVersion: 0, MaxVersion: 4},
+		{ApiKey: protocol.JoinGroupKey, MinVersion: 0, MaxVersion: 9},
+		{ApiKey: protocol.HeartbeatKey, MinVersion: 0, MaxVersion: 4},
+		{ApiKey: protocol.LeaveGroupKey, MinVersion: 0, MaxVersion: 5},
+		{ApiKey: protocol.SyncGroupKey, MinVersion: 0, MaxVersion: 5},
+		{ApiKey: protocol.DescribeGroupsKey, MinVersion: 0, MaxVersion: 5},
+		{ApiKey: protocol.ListGroupsKey, MinVersion: 0, MaxVersion: 4},
+		{ApiKey: protocol.CreateTopicsKey, MinVersion: 0, MaxVersion: 7},
+		{ApiKey: protocol.DeleteTopicsKey, MinVersion: 0, MaxVersion: 6},
+		{ApiKey: protocol.InitProducerIDKey, MinVersion: 0, MaxVersion: 4},
+		{ApiKey: protocol.AddPartitionsToTxnKey, MinVersion: 0, MaxVersion: 4},
+		{ApiKey: protocol.AddOffsetsToTxnKey, MinVersion: 0, MaxVersion: 3},
+		{ApiKey: protocol.EndTxnKey, MinVersion: 0, MaxVersion: 3},
+		{ApiKey: protocol.TxnOffsetCommitKey, MinVersion: 0, MaxVersion: 3},
+		{ApiKey: protocol.DescribeConfigsKey, MinVersion: 0, MaxVersion: 4},
+		{ApiKey: protocol.DeleteGroupsKey, MinVersion: 0, MaxVersion: 2},
+		{ApiKey: protocol.OffsetDeleteKey, MinVersion: 0, MaxVersion: 0},
 	}
 	return c.writeResponse(hdr, resp)
 }
@@ -162,14 +196,28 @@ func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) e
 	return c.writeResponse(hdr, resp)
 }
 
-func (c *conn) rejectNotImplemented(hdr protocol.RequestHeader) error {
-	// We cannot generically build a typed error response without knowing
-	// every API key. The cheapest correct behaviour is to close the
-	// connection; clients will see a network error which is honest given
-	// M1 has no upstream wired in yet.
-	c.log.WarnContext(c.ctx, "api key not implemented in M1, closing",
-		"api_key", hdr.APIKey, "api_version", hdr.APIVersion, "authenticated", c.state == stateAuthenticated)
-	return errors.Errorf("api key %d not implemented", hdr.APIKey)
+// forwardPassthrough sends frame to the upstream connection unchanged
+// (modulo correlation-id substitution) and writes the response back to the
+// client. The upstream connection is dialled lazily.
+func (c *conn) forwardPassthrough(hdr protocol.RequestHeader, frame []byte) error {
+	if c.upstream == nil {
+		up, err := upstream.Dial(c.ctx, c.tenant)
+		if err != nil {
+			return errors.Wrap(err, "forwardPassthrough")
+		}
+		c.upstream = up
+		c.log.InfoContext(c.ctx, "upstream connected", "addr", c.tenant.Upstream, "tenant_id", c.tenant.ID)
+	}
+	respFrame, err := c.upstream.RoundTrip(
+		frame,
+		hdr.CorrelationID,
+		hdr.HeaderVersion,
+		protocol.ResponseHeaderVersion(hdr.APIKey, hdr.APIVersion),
+	)
+	if err != nil {
+		return errors.Wrap(err, "forwardPassthrough")
+	}
+	return protocol.WriteFrame(c.nc, respFrame)
 }
 
 func (c *conn) writeResponse(hdr protocol.RequestHeader, resp kmsg.Response) error {
