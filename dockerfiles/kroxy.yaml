@@ -1,0 +1,30 @@
+listen: ":9092"
+advertised: "kroxy:9092"
+
+upstream:
+  bootstrap: "kafka:9093"
+
+resolver:
+  users:
+    - username: tenantA
+      password: tenantApw
+      tenant_id: tenantA
+      topic_prefix: "tenantA."
+      upstream_sasl:
+        username: kroxy
+        password: kroxypw
+    - username: tenantB
+      password: tenantBpw
+      tenant_id: tenantB
+      topic_prefix: "tenantB."
+      upstream_sasl:
+        username: kroxy
+        password: kroxypw
+
+log:
+  level: info
+  format: json
+
+metrics:
+  enabled: true
+  listen: ":9090"

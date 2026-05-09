@@ -59,17 +59,35 @@ func (c *conn) close() {
 	}
 }
 
+// clientIdleTimeout bounds how long the proxy will wait for the next
+// request from an authenticated client before closing the connection.
+// SASL handshake gets a tighter window via clientHandshakeTimeout.
+const (
+	clientIdleTimeout      = 10 * time.Minute
+	clientHandshakeTimeout = 30 * time.Second
+)
+
 // serve runs the per-connection request/response loop.
 func (c *conn) serve() error {
 	for {
 		if err := c.ctx.Err(); err != nil {
 			return err
 		}
+		to := clientIdleTimeout
+		if c.state != stateAuthenticated {
+			to = clientHandshakeTimeout
+		}
+		if err := c.nc.SetReadDeadline(time.Now().Add(to)); err != nil {
+			return errors.Wrap(err, "serve")
+		}
 		frame, err := protocol.ReadFrame(c.nc)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return errClientClosed
 			}
+			return errors.Wrap(err, "serve")
+		}
+		if err := c.nc.SetReadDeadline(time.Time{}); err != nil {
 			return errors.Wrap(err, "serve")
 		}
 		hdr, err := protocol.ParseRequestHeader(frame)

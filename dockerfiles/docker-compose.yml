@@ -1,0 +1,57 @@
+# Demo stack:
+#   - kafka:   single-node Apache Kafka in KRaft mode, SASL/PLAIN over PLAINTEXT
+#              on the internal listener (port 9093) — that is what kroxy talks to.
+#   - kroxy:   the multi-tenant proxy. Clients connect on host port 19092.
+#
+# Usage:
+#   docker compose -f dockerfiles/docker-compose.yml up --build
+#
+# Then connect a Kafka client to localhost:19092 with SASL/PLAIN credentials
+# defined in dockerfiles/kroxy.yaml (e.g. tenantA / tenantApw).
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: kroxy-kafka
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: SASL_PLAINTEXT://0.0.0.0:9093,CONTROLLER://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: SASL_PLAINTEXT:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # JAAS config that defines the upstream credentials kroxy presents.
+      KAFKA_OPTS: >-
+        -Djava.security.auth.login.config=/etc/kafka/kafka_jaas.conf
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    volumes:
+      - ./kafka_jaas.conf:/etc/kafka/kafka_jaas.conf:ro
+      - ./client.properties:/etc/kafka/client.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9093 --command-config /etc/kafka/client.properties --list || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kroxy:
+    build:
+      context: ..
+      dockerfile: dockerfiles/Dockerfile
+    container_name: kroxy
+    depends_on:
+      kafka:
+        condition: service_started
+    ports:
+      - "19092:9092" # client-facing Kafka port
+      - "19090:9090" # Prometheus metrics
+    volumes:
+      - ./kroxy.yaml:/etc/kroxy/config.yaml:ro
+    command: ["-config", "/etc/kroxy/config.yaml"]

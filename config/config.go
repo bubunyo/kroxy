@@ -117,7 +117,7 @@ func (c *Config) validate() error {
 }
 
 // MemoryUsers maps the user list onto the resolver package's input type.
-func (c Config) MemoryUsers() []resolver.MemoryUser {
+func (c *Config) MemoryUsers() []resolver.MemoryUser {
 	out := make([]resolver.MemoryUser, len(c.Resolver.Users))
 	for i, u := range c.Resolver.Users {
 		upstream := u.Upstream
