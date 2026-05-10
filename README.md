@@ -201,71 +201,7 @@ The only thing kroxy needs to know about a tenant is the mapping
 
 ## Admin RPC
 
-kroxy exposes a JSON-RPC 2.0 endpoint for managing the in-memory tenant
-table at runtime. It runs in the same binary as the proxy on its own
-port.
-
-> **Warning** — the admin RPC has **no authentication** in v1. It binds
-> to `127.0.0.1:9095` by default. If you expose it on any other
-> interface, gate it at the network layer (firewall, mesh, reverse
-> proxy with auth, …).
-
-Enable it in `kroxy.yaml`:
-
-```yaml
-admin:
-  enabled: true
-  listen: "127.0.0.1:9095"
-```
-
-### Methods
-
-All methods live under the `Tenants` service.
-
-| Method           | Params                                  | Result                 |
-| ---------------- | --------------------------------------- | ---------------------- |
-| `Tenants.Set`    | `id`, `topic_prefix`, `upstream`        | `{ "ok": true }`       |
-| `Tenants.Delete` | `id`                                    | `{ "ok": true }`       |
-| `Tenants.List`   | _(none)_                                | `{ "tenants": [...] }` |
-
-`Set` is create-only — to mutate an existing tenant, `Delete` then
-`Set` again.
-
-### Domain error codes
-
-| Code     | Meaning                                  |
-| -------- | ---------------------------------------- |
-| `-32011` | tenant already exists                    |
-| `-32012` | tenant not found                         |
-| `-32013` | invalid request payload / missing field  |
-
-(Codes `-32001` … `-32004` are reserved by the JSON-RPC framework.)
-
-### curl
-
-```bash
-curl -sS -X POST http://127.0.0.1:9095/rpc \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "Tenants.Set",
-        "params": {
-          "id":           "tenantA",
-          "topic_prefix": "tenantA.",
-          "upstream":     "kafka:9093"
-        }
-      }'
-```
-
-A small helper script lives at `examples/admin-curl.sh`:
-
-```bash
-ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh list
-ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh \
-  set tenantA "tenantA." kafka:9093
-ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh delete tenantA
-```
+kroxy exposes a JSON-RPC 2.0 admin API for managing tenants at runtime. See [admin/RPC.md](admin/RPC.md) for methods, request/response shapes, error codes, and curl examples.
 
 ## Observability
 
