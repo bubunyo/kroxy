@@ -22,6 +22,7 @@ type Metrics struct {
 	RequestDuration    *prometheus.HistogramVec
 	UpstreamErrorTotal *prometheus.CounterVec
 	ResolverCallsTotal *prometheus.CounterVec
+	SaslHandshakeTotal *prometheus.CounterVec
 }
 
 // NewMetrics builds and registers the proxy's Prometheus metrics on a
@@ -55,6 +56,11 @@ func NewMetrics() *Metrics {
 			Namespace: "kroxy", Name: "resolver_calls_total",
 			Help: "Total number of resolver lookups, labelled by result.",
 		}, []string{"result"}),
+		SaslHandshakeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "kroxy", Name: "sasl_handshakes_total",
+			Help: "Total SASL handshake outcomes labelled by mechanism and result " +
+				"(ok, unsupported, malformed, unauthorized, upstream_error).",
+		}, []string{"mechanism", "result"}),
 	}
 	reg.MustRegister(
 		m.ConnectionsActive,
@@ -63,6 +69,7 @@ func NewMetrics() *Metrics {
 		m.RequestDuration,
 		m.UpstreamErrorTotal,
 		m.ResolverCallsTotal,
+		m.SaslHandshakeTotal,
 	)
 	return m
 }

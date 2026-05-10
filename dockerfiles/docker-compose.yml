@@ -25,8 +25,16 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
-      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN,SCRAM-SHA-256,SCRAM-SHA-512
       KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      # SCRAM is advertised by the broker but no SCRAM credentials are
+      # pre-provisioned in this demo stack. To bootstrap a SCRAM user, run:
+      #   docker exec kroxy-kafka /opt/kafka/bin/kafka-configs.sh \
+      #     --bootstrap-server kafka:9093 \
+      #     --command-config /etc/kafka/client.properties \
+      #     --alter --add-config 'SCRAM-SHA-256=[password=tenantApw]' \
+      #     --entity-type users --entity-name tenantA
+      # PLAIN works out of the box for tenantA / tenantApw and tenantB / tenantBpw.
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1

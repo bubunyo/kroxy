@@ -3,12 +3,12 @@
 A multi-tenant Kafka proxy written in Go.
 
 `kroxy` sits in front of a single Apache Kafka cluster and turns it into a
-multi-tenant service. It terminates SASL/PLAIN at the edge, uses the
-client's username to look up a tenant, and rewrites every topic, consumer
-group and transactional ID with a per-tenant prefix on the way to the
-upstream broker (and back). Each tenant sees a flat namespace that looks
-like its own dedicated cluster; the broker sees fully-qualified,
-prefixed names.
+multi-tenant service. It terminates SASL (PLAIN, SCRAM-SHA-256,
+SCRAM-SHA-512) at the edge, uses the client's username to look up a
+tenant, and rewrites every topic, consumer group and transactional ID
+with a per-tenant prefix on the way to the upstream broker (and back).
+Each tenant sees a flat namespace that looks like its own dedicated
+cluster; the broker sees fully-qualified, prefixed names.
 
 The proxy is a single static binary with no external dependencies beyond
 Kafka itself.
@@ -181,20 +181,33 @@ Notes:
 
 ## Authentication model
 
-kroxy is a SASL/PLAIN **pass-through**. The SASL username on the wire
-is the tenant ID; the password is forwarded verbatim to the tenant's
-upstream Kafka cluster, which is the sole auth authority. **kroxy
-stores no client secrets** and does not validate passwords itself.
+kroxy is a SASL **pass-through**. It supports three mechanisms:
+
+- **PLAIN** — single-shot. Username == tenant ID, password forwarded
+  verbatim to the upstream broker.
+- **SCRAM-SHA-256** — challenge/response. kroxy peeks only at the SASLname
+  in the SCRAM `client-first-message` (== tenant ID) for routing, then
+  relays every `SaslAuthenticate` frame between client and upstream
+  unchanged.
+- **SCRAM-SHA-512** — same model as SCRAM-SHA-256.
+
+The upstream Kafka cluster is the sole authentication authority for all
+three mechanisms. **kroxy stores no client secrets** and does not validate
+passwords or SCRAM proofs itself.
 
 Consequences:
 
 - Every tenant ID must be a real principal in the upstream broker
-  (declared in its JAAS file or auth backend, e.g. `kafka_jaas.conf`).
-- Unknown tenant IDs are rejected at the proxy before any upstream
-  dial, returning a SASL authentication failure.
-- Passwords are held in memory for the duration of the client
-  connection (to be able to reconnect to upstream on failure) and never
-  written to logs.
+  (declared in its JAAS file for PLAIN, or registered as SCRAM credentials
+  via `kafka-configs.sh --add-config 'SCRAM-SHA-256=[password=...]'` for
+  SCRAM).
+- Unknown tenant IDs are rejected at the proxy before any upstream dial,
+  returning a SASL authentication failure.
+- For PLAIN, the password is held in memory for the duration of the client
+  connection (to support upstream reconnection) and never written to logs.
+  For SCRAM, kroxy never observes the password at all.
+- SASL channel binding (`y`, `p=...`) is not supported — kroxy is not the
+  TLS terminator for the SCRAM exchange.
 
 The only thing kroxy needs to know about a tenant is the mapping
 `id → (topic_prefix, upstream)`.
@@ -278,7 +291,8 @@ deferred:
 
 - **No TLS** on either the client or upstream side. Run kroxy on a
   trusted network or behind a TLS-terminating sidecar.
-- **SASL/PLAIN only.** No SCRAM, no OAUTHBEARER, no mTLS, no Kerberos.
+- **SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512.** No OAUTHBEARER, no
+  mTLS, no Kerberos. No SASL channel binding.
 - **Single shared upstream cluster.** Per-tenant `upstream` is plumbed
   through but every tenant in the demo points at the same broker.
 - **No hot config reload.** Restart to pick up YAML changes; use the

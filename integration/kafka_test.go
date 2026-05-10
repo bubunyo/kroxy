@@ -17,7 +17,10 @@ import (
 // JAAS file declaring the SASL/PLAIN principals the test broker accepts.
 //
 // Inter-broker / admin uses "broker" / "brokerpw"; integration tests
-// authenticate as "tenantA", "tenantB", "carol".
+// authenticate as "tenantA", "tenantB", "carol" via PLAIN. SCRAM-SHA-256
+// and SCRAM-SHA-512 credentials for the same usernames are bootstrapped at
+// storage-format time via kafka-storage.sh --add-scram (see starter script
+// in copyStarterScript). SCRAM principals do not appear in this JAAS file.
 const integrationJAAS = `KafkaServer {
     org.apache.kafka.common.security.plain.PlainLoginModule required
     username="broker"
@@ -26,6 +29,7 @@ const integrationJAAS = `KafkaServer {
     user_tenantA="tenantA"
     user_tenantB="tenantB"
     user_carol="carolpw";
+    org.apache.kafka.common.security.scram.ScramLoginModule required;
 };
 KafkaClient {
     org.apache.kafka.common.security.plain.PlainLoginModule required
@@ -61,7 +65,7 @@ func startKafkaSASL(ctx context.Context, t *testing.T) (string, func()) {
 				"KAFKA_INTER_BROKER_LISTENER_NAME":               "SASL_PLAINTEXT",
 				"KAFKA_CONTROLLER_LISTENER_NAMES":                "CONTROLLER",
 				"KAFKA_CONTROLLER_QUORUM_VOTERS":                 "1@localhost:9094",
-				"KAFKA_SASL_ENABLED_MECHANISMS":                  "PLAIN",
+				"KAFKA_SASL_ENABLED_MECHANISMS":                  "PLAIN,SCRAM-SHA-256,SCRAM-SHA-512",
 				"KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL":     "PLAIN",
 				"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR":         "1",
 				"KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
@@ -119,6 +123,26 @@ func copyStarterScript(externalPort string) testcontainers.ContainerHook {
 		script := fmt.Sprintf(`#!/bin/bash
 set -e
 export KAFKA_ADVERTISED_LISTENERS="SASL_PLAINTEXT://%s:%s"
+
+# Pre-format storage with SCRAM credentials for the SASL principals the
+# tests need. The credentials use the same passwords declared in JAAS for
+# PLAIN so a single password works for both mechanisms. The official
+# docker wrapper (invoked by /etc/kafka/docker/run) will see the storage
+# is "already formatted" and proceed without overwriting.
+LOG_DIRS=$(awk -F= '/^log.dirs/ {print $2}' /etc/kafka/docker/server.properties || true)
+LOG_DIRS=${LOG_DIRS:-/tmp/kraft-combined-logs}
+mkdir -p "$LOG_DIRS"
+KAFKA_HEAP_OPTS="-Xms64M -Xmx128M" /opt/kafka/bin/kafka-storage.sh format \
+    --cluster-id "$CLUSTER_ID" \
+    --config /etc/kafka/docker/server.properties \
+    --add-scram 'SCRAM-SHA-256=[name=tenantA,password=tenantA]' \
+    --add-scram 'SCRAM-SHA-512=[name=tenantA,password=tenantA]' \
+    --add-scram 'SCRAM-SHA-256=[name=tenantB,password=tenantB]' \
+    --add-scram 'SCRAM-SHA-512=[name=tenantB,password=tenantB]' \
+    --add-scram 'SCRAM-SHA-256=[name=carol,password=carolpw]' \
+    --add-scram 'SCRAM-SHA-512=[name=carol,password=carolpw]' \
+    --ignore-formatted || true
+
 exec /etc/kafka/docker/run
 `, host, hostPort.Port())
 		return c.CopyToContainer(ctx, []byte(script), starterPath, 0o755)

@@ -49,24 +49,67 @@ func (c *Conn) applyRequestDeadline() error {
 // verbatim — kroxy does not validate them; the upstream broker is the auth
 // authority.
 func Dial(ctx context.Context, addr, username, password string) (*Conn, error) {
+	c, err := dialAndNegotiate(ctx, addr, auth.MechanismPlain)
+	if err != nil {
+		return nil, errors.Wrap(err, "Dial")
+	}
+	if err := c.plainAuthenticate(username, password); err != nil {
+		_ = c.nc.Close()
+		return nil, errors.Wrap(err, "Dial")
+	}
+	if err := c.nc.SetDeadline(time.Time{}); err != nil {
+		_ = c.nc.Close()
+		return nil, errors.Wrap(err, "Dial")
+	}
+	return c, nil
+}
+
+// DialForSCRAM opens a TCP connection to addr and performs ApiVersions +
+// SaslHandshake selecting mechanism, but does NOT complete the
+// SaslAuthenticate exchange. Callers drive the SCRAM message rounds via
+// RelaySASLAuthenticate, which forwards the client-supplied payloads
+// verbatim. mechanism must be one of auth.MechanismSCRAMSHA256 /
+// auth.MechanismSCRAMSHA512.
+func DialForSCRAM(ctx context.Context, addr, mechanism string) (*Conn, error) {
+	if !auth.IsSCRAMMechanism(mechanism) {
+		return nil, errors.Errorf("DialForSCRAM: unsupported mechanism %q", mechanism)
+	}
+	c, err := dialAndNegotiate(ctx, addr, mechanism)
+	if err != nil {
+		return nil, errors.Wrap(err, "DialForSCRAM")
+	}
+	// Leave the deadline cleared; per-request deadlines will be applied
+	// during RelaySASLAuthenticate via applyRequestDeadline.
+	if err := c.nc.SetDeadline(time.Time{}); err != nil {
+		_ = c.nc.Close()
+		return nil, errors.Wrap(err, "DialForSCRAM")
+	}
+	return c, nil
+}
+
+// dialAndNegotiate opens the TCP connection, runs ApiVersions, and runs
+// SaslHandshake selecting the given mechanism. The returned Conn still has
+// the dial-deadline applied; the caller must clear it once initial
+// authentication is complete.
+func dialAndNegotiate(ctx context.Context, addr, mechanism string) (*Conn, error) {
 	d := net.Dialer{Timeout: dialTimeout}
 	nc, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, errors.Wrap(err, "Dial")
+		return nil, errors.Wrap(err, "dialAndNegotiate")
 	}
 	c := &Conn{nc: nc, reqTO: DefaultRequestTimeout}
 	deadline := time.Now().Add(dialTimeout)
 	if err := nc.SetDeadline(deadline); err != nil {
 		_ = nc.Close()
-		return nil, errors.Wrap(err, "Dial")
+		return nil, errors.Wrap(err, "dialAndNegotiate")
 	}
-	if err := c.handshake(username, password); err != nil {
+	if err := c.apiVersions(); err != nil {
 		_ = nc.Close()
-		return nil, errors.Wrap(err, "Dial")
+		return nil, errors.Wrap(err, "dialAndNegotiate")
 	}
-	if err := nc.SetDeadline(time.Time{}); err != nil {
+	if err := c.saslHandshake(mechanism); err != nil {
 		_ = nc.Close()
-		return nil, errors.Wrap(err, "Dial")
+		return nil, errors.Wrap(err, "dialAndNegotiate")
 	}
 	return c, nil
 }
@@ -159,54 +202,85 @@ func (c *Conn) RoundTripRequest(req kmsg.Request, clientID string) ([]byte, erro
 	return respFrame[off:], nil
 }
 
-// handshake performs ApiVersions then SaslHandshake then SaslAuthenticate
-// against the upstream broker using the supplied PLAIN credentials.
-func (c *Conn) handshake(username, password string) error {
-	// 1. ApiVersions v0 (smallest, broadest compat).
+// apiVersions runs an ApiVersions v0 exchange against the upstream broker.
+// v0 is the smallest, broadest-compat variant.
+func (c *Conn) apiVersions() error {
 	avReq := kmsg.NewPtrApiVersionsRequest()
 	avReq.SetVersion(0)
 	if _, err := c.directRoundTrip(avReq, protocol.ApiVersionsKey, 0); err != nil {
-		return errors.Wrap(err, "handshake")
+		return errors.Wrap(err, "apiVersions")
 	}
+	return nil
+}
 
-	// 2. SaslHandshake v1 — selects mechanism PLAIN.
+// saslHandshake runs SaslHandshake v1 selecting the given mechanism.
+func (c *Conn) saslHandshake(mechanism string) error {
 	hsReq := kmsg.NewPtrSASLHandshakeRequest()
 	hsReq.SetVersion(1)
-	hsReq.Mechanism = auth.MechanismPlain
+	hsReq.Mechanism = mechanism
 	hsRespBody, err := c.directRoundTrip(hsReq, protocol.SaslHandshakeKey, 1)
 	if err != nil {
-		return errors.Wrap(err, "handshake")
+		return errors.Wrap(err, "saslHandshake")
 	}
 	hsResp := kmsg.NewPtrSASLHandshakeResponse()
 	hsResp.SetVersion(1)
 	if err := hsResp.ReadFrom(hsRespBody); err != nil {
-		return errors.Wrap(err, "handshake")
+		return errors.Wrap(err, "saslHandshake")
 	}
 	if hsResp.ErrorCode != 0 {
-		return errors.Errorf("handshake: upstream SaslHandshake error code %d", hsResp.ErrorCode)
+		return errors.Errorf("saslHandshake: upstream error code %d", hsResp.ErrorCode)
 	}
+	return nil
+}
 
-	// 3. SaslAuthenticate v1 — forward the client's PLAIN credentials.
+// plainAuthenticate completes a single-shot SASL/PLAIN authenticate against
+// the upstream broker using the supplied credentials.
+func (c *Conn) plainAuthenticate(username, password string) error {
 	authReq := kmsg.NewPtrSASLAuthenticateRequest()
 	authReq.SetVersion(1)
 	authReq.SASLAuthBytes = []byte("\x00" + username + "\x00" + password)
 	authRespBody, err := c.directRoundTrip(authReq, protocol.SaslAuthenticateKey, 1)
 	if err != nil {
-		return errors.Wrap(err, "handshake")
+		return errors.Wrap(err, "plainAuthenticate")
 	}
 	authResp := kmsg.NewPtrSASLAuthenticateResponse()
 	authResp.SetVersion(1)
 	if err := authResp.ReadFrom(authRespBody); err != nil {
-		return errors.Wrap(err, "handshake")
+		return errors.Wrap(err, "plainAuthenticate")
 	}
 	if authResp.ErrorCode != 0 {
 		msg := ""
 		if authResp.ErrorMessage != nil {
 			msg = *authResp.ErrorMessage
 		}
-		return errors.Errorf("handshake: upstream SaslAuthenticate error %d: %s", authResp.ErrorCode, msg)
+		return errors.Errorf("plainAuthenticate: upstream error %d: %s", authResp.ErrorCode, msg)
 	}
 	return nil
+}
+
+// RelaySASLAuthenticate forwards a single SCRAM SaslAuthenticate payload
+// (the opaque SASLAuthBytes blob produced by the client) to the upstream
+// broker and returns the upstream's response payload, error code, and
+// optional error message. err is non-nil only on transport / decoding
+// failures; protocol-level errors are surfaced via errCode/errMsg so the
+// caller can relay them to the client unchanged.
+func (c *Conn) RelaySASLAuthenticate(payload []byte) (respPayload []byte, errCode int16, errMsg string, err error) {
+	req := kmsg.NewPtrSASLAuthenticateRequest()
+	req.SetVersion(1)
+	req.SASLAuthBytes = payload
+	body, err := c.directRoundTrip(req, protocol.SaslAuthenticateKey, 1)
+	if err != nil {
+		return nil, 0, "", errors.Wrap(err, "RelaySASLAuthenticate")
+	}
+	resp := kmsg.NewPtrSASLAuthenticateResponse()
+	resp.SetVersion(1)
+	if err := resp.ReadFrom(body); err != nil {
+		return nil, 0, "", errors.Wrap(err, "RelaySASLAuthenticate")
+	}
+	if resp.ErrorMessage != nil {
+		errMsg = *resp.ErrorMessage
+	}
+	return resp.SASLAuthBytes, resp.ErrorCode, errMsg, nil
 }
 
 // directRoundTrip is used only during the handshake when we control both
