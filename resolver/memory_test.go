@@ -23,7 +23,7 @@ func sampleUser(name string) resolver.MemoryUser {
 func TestMemory_Get(t *testing.T) {
 	t.Parallel()
 
-	m, err := resolver.NewMemory([]resolver.MemoryUser{sampleUser("alice")})
+	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{sampleUser("alice")})
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -65,7 +65,7 @@ func TestMemory_Get(t *testing.T) {
 
 func TestNewMemory_DuplicateUser(t *testing.T) {
 	t.Parallel()
-	_, err := resolver.NewMemory([]resolver.MemoryUser{
+	_, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
 		sampleUser("a"),
 		sampleUser("a"),
 	})
@@ -75,14 +75,14 @@ func TestNewMemory_DuplicateUser(t *testing.T) {
 
 func TestNewMemory_InvalidUser(t *testing.T) {
 	t.Parallel()
-	_, err := resolver.NewMemory([]resolver.MemoryUser{{Username: "a"}})
+	_, err := resolver.NewMemoryResolver([]resolver.MemoryUser{{Username: "a"}})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
 }
 
 func TestMemory_Set(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemory(nil)
+	m, err := resolver.NewMemoryResolver(nil)
 	require.NoError(t, err)
 
 	require.NoError(t, m.Set(context.Background(), sampleUser("alice")))
@@ -102,7 +102,7 @@ func TestMemory_Set(t *testing.T) {
 
 func TestMemory_Delete(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemory([]resolver.MemoryUser{sampleUser("alice")})
+	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{sampleUser("alice")})
 	require.NoError(t, err)
 
 	require.NoError(t, m.Delete(context.Background(), "alice"))
@@ -122,7 +122,7 @@ func TestMemory_Delete(t *testing.T) {
 
 func TestMemory_List_Detached(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemory([]resolver.MemoryUser{
+	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
 		sampleUser("alice"),
 		sampleUser("bob"),
 	})
@@ -147,7 +147,7 @@ func TestMemory_List_Detached(t *testing.T) {
 
 func TestMemory_ConcurrentReadDuringWrite(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemory([]resolver.MemoryUser{sampleUser("alice")})
+	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{sampleUser("alice")})
 	require.NoError(t, err)
 
 	ctx := context.Background()

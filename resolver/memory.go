@@ -7,26 +7,18 @@ import (
 	"github.com/pkg/errors"
 )
 
-// MemoryUser is a single configured tenant in the in-memory resolver.
-type MemoryUser struct {
-	Username    string
-	TenantID    string
-	TopicPrefix string
-	Upstream    string
-}
-
-// Memory is a Resolver backed by an in-memory map of usernames.
+// MemoryResolver is a Resolver backed by an in-memory map of usernames.
 //
 // It is safe for concurrent use; Get takes a read lock and the mutators take
 // a write lock.
-type Memory struct {
-	mu    sync.RWMutex
-	users map[string]MemoryUser
+type MemoryResolver struct {
+	mu      sync.RWMutex
+	tenants map[string]Tenant
 }
 
-// NewMemory builds a Memory resolver from the supplied user list. Duplicate
+// NewMemoryResolver builds a MemoryResolver resolver from the supplied user list. Duplicate
 // usernames are rejected to make configuration mistakes loud.
-func NewMemory(users []MemoryUser) (*Memory, error) {
+func NewMemoryResolver(tenants []Tenant) (*MemoryResolver, error) {
 	m := make(map[string]MemoryUser, len(users))
 	for _, u := range users {
 		if err := validateUser(u); err != nil {
@@ -37,11 +29,11 @@ func NewMemory(users []MemoryUser) (*Memory, error) {
 		}
 		m[u.Username] = u
 	}
-	return &Memory{users: m}, nil
+	return &MemoryResolver{users: m}, nil
 }
 
 // Get implements Resolver.
-func (m *Memory) Get(_ context.Context, username string) (Tenant, error) {
+func (m *MemoryResolver) Get(_ context.Context, username string) (Tenant, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	u, ok := m.users[username]
@@ -57,7 +49,7 @@ func (m *Memory) Get(_ context.Context, username string) (Tenant, error) {
 
 // Set inserts a brand-new user. It returns ErrDuplicate if the username
 // already exists.
-func (m *Memory) Set(_ context.Context, u MemoryUser) error {
+func (m *MemoryResolver) Set(_ context.Context, u MemoryUser) error {
 	if err := validateUser(u); err != nil {
 		return errors.Wrap(err, "Memory.Set")
 	}
@@ -71,7 +63,7 @@ func (m *Memory) Set(_ context.Context, u MemoryUser) error {
 }
 
 // Delete removes a user. It returns ErrNotFound when the username is unknown.
-func (m *Memory) Delete(_ context.Context, username string) error {
+func (m *MemoryResolver) Delete(_ context.Context, username string) error {
 	if username == "" {
 		return errors.Wrap(ErrInvalidUser, "Memory.Delete: empty username")
 	}
@@ -86,21 +78,19 @@ func (m *Memory) Delete(_ context.Context, username string) error {
 
 // List returns a snapshot of all configured tenants. The returned slice is
 // detached from internal storage; callers may modify it freely.
-func (m *Memory) List(_ context.Context) ([]TenantSummary, error) {
+func (m *MemoryResolver) List(_ context.Context) ([]Tenant, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]TenantSummary, 0, len(m.users))
-	for _, u := range m.users {
-		out = append(out, TenantSummary(u))
+	out := make([]Tenant, 0, len(m.tenants))
+	for _, u := range m.tenants {
+		out = append(out, u)
 	}
 	return out, nil
 }
 
-func validateUser(u MemoryUser) error {
+func validateUser(u Tenant) error {
 	switch {
-	case u.Username == "":
-		return errors.Wrap(ErrInvalidUser, "empty username")
-	case u.TenantID == "":
+	case u.ID == "":
 		return errors.Wrap(ErrInvalidUser, "empty tenant id")
 	case u.TopicPrefix == "":
 		return errors.Wrap(ErrInvalidUser, "empty topic prefix")

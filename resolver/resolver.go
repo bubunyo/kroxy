@@ -32,22 +32,14 @@ type Tenant struct {
 	Upstream    string
 }
 
-// TenantSummary is a view of a configured tenant returned to admin clients.
-type TenantSummary struct {
-	Username    string
-	TenantID    string
-	TopicPrefix string
-	Upstream    string
-}
-
 // Resolver looks up the Tenant associated with a SASL/PLAIN username and
 // exposes write operations for managing the tenant catalogue.
 //
 // Get must return ErrUnauthorized when the username is not recognised; any
 // other error is treated as a transient resolver failure.
 type Resolver interface {
-	Get(ctx context.Context, username string) (Tenant, error)
-	Set(ctx context.Context, user MemoryUser) error
+	Get(ctx context.Context, tenantI string) (Tenant, error)
+	Set(ctx context.Context, user Tenant) error
 	Delete(ctx context.Context, username string) error
-	List(ctx context.Context) ([]TenantSummary, error)
+	List(ctx context.Context) ([]Tenant, error)
 }

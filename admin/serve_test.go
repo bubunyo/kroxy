@@ -18,7 +18,7 @@ import (
 func TestServe_StartShutdown(t *testing.T) {
 	t.Parallel()
 
-	store, err := resolver.NewMemory(nil)
+	store, err := resolver.NewMemoryResolver(nil)
 	require.NoError(t, err)
 	svc := admin.NewService(store, nil)
 

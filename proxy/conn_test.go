@@ -18,7 +18,7 @@ import (
 
 func startTestServer(t *testing.T) (string, func()) {
 	t.Helper()
-	r, err := resolver.NewMemory([]resolver.MemoryUser{
+	r, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
 		{Username: "alice", TenantID: "tenantA", TopicPrefix: "tenantA.", Upstream: "kafka:9092"},
 	})
 	require.NoError(t, err)
