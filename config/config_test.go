@@ -33,11 +33,9 @@ func TestLoad(t *testing.T) {
 advertised: "kroxy:9092"
 upstream:
   bootstrap: "kafka:9092"
-resolver:
-  users:
-    - username: alice
-      tenant_id: tenantA
-      topic_prefix: "tenantA."
+tenants:
+  - id: tenantA
+    topic_prefix: "tenantA."
 `,
 			check: func(t *testing.T, c config.Config) {
 				assert.Equal(t, ":9092", c.Listen)
@@ -45,14 +43,14 @@ resolver:
 				assert.Equal(t, "json", c.Log.Format)
 				assert.Equal(t, "127.0.0.1:9095", c.Admin.Listen)
 				assert.False(t, c.Admin.Enabled)
-				users := c.MemoryUsers()
-				require.Len(t, users, 1)
-				assert.Equal(t, "alice", users[0].Username)
-				assert.Equal(t, "kafka:9092", users[0].Upstream)
+				tenants := c.ResolverTenants()
+				require.Len(t, tenants, 1)
+				assert.Equal(t, "tenantA", tenants[0].ID)
+				assert.Equal(t, "kafka:9092", tenants[0].Upstream)
 			},
 		},
 		{
-			name: "admin enabled with no users",
+			name: "admin enabled with no tenants",
 			yaml: `
 advertised: "kroxy:9092"
 upstream: { bootstrap: "k:9092" }
@@ -62,7 +60,7 @@ admin:
 			check: func(t *testing.T, c config.Config) {
 				assert.True(t, c.Admin.Enabled)
 				assert.Equal(t, "127.0.0.1:9095", c.Admin.Listen)
-				assert.Empty(t, c.MemoryUsers())
+				assert.Empty(t, c.ResolverTenants())
 			},
 		},
 		{
@@ -95,7 +93,7 @@ admin:
 			wantErr: true,
 		},
 		{
-			name: "missing users",
+			name: "missing tenants",
 			yaml: `
 advertised: "kroxy:9092"
 upstream: { bootstrap: "k:9092" }

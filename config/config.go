@@ -15,7 +15,7 @@ type Config struct {
 	Listen     string         `yaml:"listen"`
 	Advertised string         `yaml:"advertised"`
 	Upstream   UpstreamConfig `yaml:"upstream"`
-	Resolver   ResolverConfig `yaml:"resolver"`
+	Tenants    []TenantConfig `yaml:"tenants"`
 	Log        LogConfig      `yaml:"log"`
 	Metrics    MetricsConfig  `yaml:"metrics"`
 	Admin      AdminConfig    `yaml:"admin"`
@@ -41,17 +41,12 @@ type UpstreamConfig struct {
 	Bootstrap string `yaml:"bootstrap"`
 }
 
-// ResolverConfig holds the in-memory resolver's user list.
-type ResolverConfig struct {
-	Users []UserConfig `yaml:"users"`
-}
-
-// UserConfig is a single tenant entry. kroxy stores no client secrets;
-// the SASL/PLAIN username is the tenant selector and the password is
-// forwarded verbatim to the tenant's upstream Kafka cluster.
-type UserConfig struct {
-	Username    string `yaml:"username"`
-	TenantID    string `yaml:"tenant_id"`
+// TenantConfig is a single tenant entry. kroxy stores no client secrets;
+// the tenant ID is the SASL/PLAIN identity expected on the wire and the
+// password supplied by the client is forwarded verbatim to the tenant's
+// upstream Kafka cluster.
+type TenantConfig struct {
+	ID          string `yaml:"id"`
 	TopicPrefix string `yaml:"topic_prefix"`
 	Upstream    string `yaml:"upstream"`
 }
@@ -104,18 +99,15 @@ func (c *Config) validate() error {
 	if c.Upstream.Bootstrap == "" {
 		return errors.New("config: upstream.bootstrap is required")
 	}
-	if len(c.Resolver.Users) == 0 && !c.Admin.Enabled {
-		return errors.New("config: resolver.users must contain at least one user (or enable the admin RPC)")
+	if len(c.Tenants) == 0 && !c.Admin.Enabled {
+		return errors.New("config: tenants must contain at least one entry (or enable the admin RPC)")
 	}
-	for i, u := range c.Resolver.Users {
-		if u.Username == "" {
-			return errors.Errorf("config: resolver.users[%d].username is required", i)
+	for i, t := range c.Tenants {
+		if t.ID == "" {
+			return errors.Errorf("config: tenants[%d].id is required", i)
 		}
-		if u.TenantID == "" {
-			return errors.Errorf("config: resolver.users[%d].tenant_id is required", i)
-		}
-		if u.TopicPrefix == "" {
-			return errors.Errorf("config: resolver.users[%d].topic_prefix is required", i)
+		if t.TopicPrefix == "" {
+			return errors.Errorf("config: tenants[%d].topic_prefix is required", i)
 		}
 	}
 	if c.Admin.Enabled {
@@ -126,18 +118,18 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// MemoryUsers maps the user list onto the resolver package's input type.
-func (c *Config) MemoryUsers() []resolver.MemoryUser {
-	out := make([]resolver.MemoryUser, len(c.Resolver.Users))
-	for i, u := range c.Resolver.Users {
-		upstream := u.Upstream
+// ResolverTenants maps the tenant list onto resolver.Tenant values, applying
+// the default upstream where a tenant doesn't override it.
+func (c *Config) ResolverTenants() []resolver.Tenant {
+	out := make([]resolver.Tenant, len(c.Tenants))
+	for i, t := range c.Tenants {
+		upstream := t.Upstream
 		if upstream == "" {
 			upstream = c.Upstream.Bootstrap
 		}
-		out[i] = resolver.MemoryUser{
-			Username:    u.Username,
-			TenantID:    u.TenantID,
-			TopicPrefix: u.TopicPrefix,
+		out[i] = resolver.Tenant{
+			ID:          t.ID,
+			TopicPrefix: t.TopicPrefix,
 			Upstream:    upstream,
 		}
 	}

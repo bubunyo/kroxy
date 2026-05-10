@@ -236,11 +236,11 @@ func (b *fakeBroker) write(c net.Conn, resp kmsg.Response, hdr protocol.RequestH
 
 func startTestServerWithUpstream(t *testing.T, upstreamAddr string) (string, func()) {
 	t.Helper()
-	r, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
+	r, err := resolver.NewMemoryResolver([]resolver.Tenant{
 		{
-			Username: "alice",
-			TenantID: "tenantA", TopicPrefix: "tenantA.",
-			Upstream: upstreamAddr,
+			ID:          "alice",
+			TopicPrefix: "tenantA.",
+			Upstream:    upstreamAddr,
 		},
 	})
 	require.NoError(t, err)

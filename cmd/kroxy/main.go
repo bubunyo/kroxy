@@ -35,7 +35,7 @@ func run() error {
 
 	log := observability.NewLogger(os.Stdout, cfg.Log.Level, cfg.Log.Format)
 
-	res, err := resolver.NewMemoryResolver(cfg.MemoryUsers())
+	res, err := resolver.NewMemoryResolver(cfg.ResolverTenants())
 	if err != nil {
 		return err
 	}

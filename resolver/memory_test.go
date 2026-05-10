@@ -11,30 +11,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func sampleUser(name string) resolver.MemoryUser {
-	return resolver.MemoryUser{
-		Username:    name,
-		TenantID:    name,
-		TopicPrefix: name + ".",
+func sampleTenant(id string) resolver.Tenant {
+	return resolver.Tenant{
+		ID:          id,
+		TopicPrefix: id + ".",
 		Upstream:    "kafka:9092",
 	}
 }
 
-func TestMemory_Get(t *testing.T) {
+func TestMemoryResolver_Get(t *testing.T) {
 	t.Parallel()
 
-	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{sampleUser("alice")})
+	m, err := resolver.NewMemoryResolver([]resolver.Tenant{sampleTenant("alice")})
 	require.NoError(t, err)
 
 	tests := []struct {
-		name     string
-		username string
-		wantErr  error
-		want     resolver.Tenant
+		name    string
+		id      string
+		wantErr error
+		want    resolver.Tenant
 	}{
 		{
-			name:     "known user",
-			username: "alice",
+			name: "known tenant",
+			id:   "alice",
 			want: resolver.Tenant{
 				ID:          "alice",
 				TopicPrefix: "alice.",
@@ -42,16 +41,16 @@ func TestMemory_Get(t *testing.T) {
 			},
 		},
 		{
-			name:     "unknown user",
-			username: "ghost",
-			wantErr:  resolver.ErrUnauthorized,
+			name:    "unknown tenant",
+			id:      "ghost",
+			wantErr: resolver.ErrUnauthorized,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := m.Get(context.Background(), tt.username)
+			got, err := m.Get(context.Background(), tt.id)
 			if tt.wantErr != nil {
 				require.Error(t, err)
 				assert.True(t, errors.Is(err, tt.wantErr))
@@ -63,46 +62,46 @@ func TestMemory_Get(t *testing.T) {
 	}
 }
 
-func TestNewMemory_DuplicateUser(t *testing.T) {
+func TestNewMemoryResolver_Duplicate(t *testing.T) {
 	t.Parallel()
-	_, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
-		sampleUser("a"),
-		sampleUser("a"),
+	_, err := resolver.NewMemoryResolver([]resolver.Tenant{
+		sampleTenant("a"),
+		sampleTenant("a"),
 	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrDuplicate))
 }
 
-func TestNewMemory_InvalidUser(t *testing.T) {
+func TestNewMemoryResolver_Invalid(t *testing.T) {
 	t.Parallel()
-	_, err := resolver.NewMemoryResolver([]resolver.MemoryUser{{Username: "a"}})
+	_, err := resolver.NewMemoryResolver([]resolver.Tenant{{ID: "a"}})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
+	assert.True(t, errors.Is(err, resolver.ErrInvalidTenant))
 }
 
-func TestMemory_Set(t *testing.T) {
+func TestMemoryResolver_Set(t *testing.T) {
 	t.Parallel()
 	m, err := resolver.NewMemoryResolver(nil)
 	require.NoError(t, err)
 
-	require.NoError(t, m.Set(context.Background(), sampleUser("alice")))
+	require.NoError(t, m.Set(context.Background(), sampleTenant("alice")))
 
-	err = m.Set(context.Background(), sampleUser("alice"))
+	err = m.Set(context.Background(), sampleTenant("alice"))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrDuplicate))
 
-	err = m.Set(context.Background(), resolver.MemoryUser{Username: "x"})
+	err = m.Set(context.Background(), resolver.Tenant{ID: "x"})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
+	assert.True(t, errors.Is(err, resolver.ErrInvalidTenant))
 
 	tenant, err := m.Get(context.Background(), "alice")
 	require.NoError(t, err)
 	assert.Equal(t, "alice", tenant.ID)
 }
 
-func TestMemory_Delete(t *testing.T) {
+func TestMemoryResolver_Delete(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{sampleUser("alice")})
+	m, err := resolver.NewMemoryResolver([]resolver.Tenant{sampleTenant("alice")})
 	require.NoError(t, err)
 
 	require.NoError(t, m.Delete(context.Background(), "alice"))
@@ -117,14 +116,14 @@ func TestMemory_Delete(t *testing.T) {
 
 	err = m.Delete(context.Background(), "")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
+	assert.True(t, errors.Is(err, resolver.ErrInvalidTenant))
 }
 
-func TestMemory_List_Detached(t *testing.T) {
+func TestMemoryResolver_List_Detached(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
-		sampleUser("alice"),
-		sampleUser("bob"),
+	m, err := resolver.NewMemoryResolver([]resolver.Tenant{
+		sampleTenant("alice"),
+		sampleTenant("bob"),
 	})
 	require.NoError(t, err)
 
@@ -132,22 +131,22 @@ func TestMemory_List_Detached(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 
-	for _, s := range got {
-		assert.NotEmpty(t, s.Username)
-		assert.NotEmpty(t, s.TenantID)
+	for _, tn := range got {
+		assert.NotEmpty(t, tn.ID)
+		assert.NotEmpty(t, tn.TopicPrefix)
 	}
 
-	got[0].TenantID = "mutated"
+	got[0].TopicPrefix = "mutated."
 	got2, err := m.List(context.Background())
 	require.NoError(t, err)
-	for _, s := range got2 {
-		assert.NotEqual(t, "mutated", s.TenantID, "List result must be detached from internal storage")
+	for _, tn := range got2 {
+		assert.NotEqual(t, "mutated.", tn.TopicPrefix, "List result must be detached from internal storage")
 	}
 }
 
-func TestMemory_ConcurrentReadDuringWrite(t *testing.T) {
+func TestMemoryResolver_ConcurrentReadDuringWrite(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver([]resolver.MemoryUser{sampleUser("alice")})
+	m, err := resolver.NewMemoryResolver([]resolver.Tenant{sampleTenant("alice")})
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -171,9 +170,8 @@ func TestMemory_ConcurrentReadDuringWrite(t *testing.T) {
 	}
 
 	for i := 0; i < 50; i++ {
-		u := sampleUser("user")
-		_ = m.Set(ctx, u)
-		_ = m.Delete(ctx, "user")
+		_ = m.Set(ctx, sampleTenant("transient"))
+		_ = m.Delete(ctx, "transient")
 	}
 	close(stop)
 	wg.Wait()

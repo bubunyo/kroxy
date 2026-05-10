@@ -7,9 +7,10 @@
 # Override the endpoint with $ADMIN to point at a different host/port:
 #   ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh list
 #
-# kroxy is a SASL/PLAIN pass-through: the username selects the tenant and
-# the password is forwarded verbatim to the upstream Kafka cluster, which
-# is the auth authority. kroxy itself stores no secrets.
+# kroxy is a SASL/PLAIN pass-through: the SASL username on the wire is
+# the tenant ID, and the password is forwarded verbatim to the upstream
+# Kafka cluster, which is the auth authority. kroxy itself stores no
+# secrets.
 
 set -euo pipefail
 
@@ -21,8 +22,8 @@ Usage: $0 <command> [args]
 
 Commands:
   list
-  set    <username> <tenant_id> <topic_prefix> <upstream>
-  delete <username>
+  set    <id> <topic_prefix> <upstream>
+  delete <id>
 EOF
   exit 2
 }
@@ -41,15 +42,15 @@ case "$cmd" in
     call "Tenants.List" '{}'
     ;;
   set)
-    [ "$#" -eq 4 ] || usage
-    user="$1" tid="$2" prefix="$3" upstream="$4"
+    [ "$#" -eq 3 ] || usage
+    id="$1" prefix="$2" upstream="$3"
     call "Tenants.Set" \
-      "{\"username\":\"$user\",\"tenant_id\":\"$tid\",\"topic_prefix\":\"$prefix\",\"upstream\":\"$upstream\"}"
+      "{\"id\":\"$id\",\"topic_prefix\":\"$prefix\",\"upstream\":\"$upstream\"}"
     ;;
   delete)
     [ "$#" -eq 1 ] || usage
-    user="$1"
-    call "Tenants.Delete" "{\"username\":\"$user\"}"
+    id="$1"
+    call "Tenants.Delete" "{\"id\":\"$id\"}"
     ;;
   *)
     usage

@@ -40,9 +40,9 @@ const (
 func startProxy(t *testing.T, upstream string) (addr string, stop func()) {
 	t.Helper()
 
-	res, err := resolver.NewMemoryResolver([]resolver.MemoryUser{
-		{Username: tenantA, TenantID: "tenantA", TopicPrefix: tenantA + ".", Upstream: upstream},
-		{Username: tenantB, TenantID: "tenantB", TopicPrefix: tenantB + ".", Upstream: upstream},
+	res, err := resolver.NewMemoryResolver([]resolver.Tenant{
+		{ID: tenantA, TopicPrefix: tenantA + ".", Upstream: upstream},
+		{ID: tenantB, TopicPrefix: tenantB + ".", Upstream: upstream},
 	})
 	require.NoError(t, err)
 
@@ -275,16 +275,15 @@ func TestEndToEnd_AdminSetThenAuth(t *testing.T) {
 
 	client := admin.NewClient("http://" + adminAddr + "/rpc")
 	require.NoError(t, client.Set(ctx, admin.SetParams{
-		Username:    "carol",
-		TenantID:    "tenantC",
-		TopicPrefix: "tenantC.",
+		ID:          "carol",
+		TopicPrefix: "carol.",
 		Upstream:    upstream,
 	}))
 
 	listed, err := client.List(ctx)
 	require.NoError(t, err)
 	require.Len(t, listed.Tenants, 1)
-	assert.Equal(t, "carol", listed.Tenants[0].Username)
+	assert.Equal(t, "carol", listed.Tenants[0].ID)
 
 	prod := newClient(t, proxyAddr, "carol", "carolpw",
 		kgo.AllowAutoTopicCreation(),
@@ -307,10 +306,10 @@ func TestEndToEnd_AdminSetThenAuth(t *testing.T) {
 	require.NoError(t, err)
 	var found bool
 	for _, top := range mdResp.Topics {
-		if top.Topic != nil && *top.Topic == "tenantC.admin-events" {
+		if top.Topic != nil && *top.Topic == "carol.admin-events" {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "expected tenantC.admin-events on the broker")
+	assert.True(t, found, "expected carol.admin-events on the broker")
 }

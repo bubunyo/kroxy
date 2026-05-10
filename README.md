@@ -60,11 +60,11 @@ dedicated one:
 
 For each accepted client connection kroxy:
 
-1. Reads the SASL/PLAIN handshake. The username is the **tenant
-   selector**; the password is held in memory for the life of the
-   connection and forwarded to the upstream broker on the first dial.
+1. Reads the SASL/PLAIN handshake. The username **is** the tenant ID;
+   the password is held in memory for the life of the connection and
+   forwarded to the upstream broker on the first dial.
 2. Looks up the tenant in the resolver to get the topic prefix and
-   upstream address. Unknown usernames are rejected before any upstream
+   upstream address. Unknown tenant IDs are rejected before any upstream
    round-trip.
 3. Lazily opens a single TCP connection to the tenant's upstream Kafka
    broker, performs SASL/PLAIN against it using the client-supplied
@@ -146,12 +146,10 @@ advertised: "kroxy:9092"      # what kroxy advertises as broker 0
 upstream:
   bootstrap: "kafka:9093"     # default upstream for tenants that omit it
 
-resolver:
-  users:
-    - username: tenantA
-      tenant_id: tenantA
-      topic_prefix: "tenantA."
-      upstream: "kafka:9093"  # optional; falls back to upstream.bootstrap
+tenants:
+  - id: tenantA
+    topic_prefix: "tenantA."
+    upstream: "kafka:9093"    # optional; falls back to upstream.bootstrap
 
 log:
   level: info                 # debug | info | warn | error
@@ -172,29 +170,29 @@ Notes:
   responses, so clients must be able to reach the proxy at this address.
 - `upstream.bootstrap` is mandatory and is used as the default upstream
   for any tenant that doesn't specify its own `upstream`.
-- The `resolver.users` list may be empty **only if** the admin RPC is
+- The `tenants` list may be empty **only if** the admin RPC is
   enabled — otherwise the proxy has nothing to authorise against.
-- A user's `username`, `tenant_id` and `topic_prefix` are all required.
+- A tenant's `id` and `topic_prefix` are both required.
 
 ## Authentication model
 
-kroxy is a SASL/PLAIN **pass-through**. The username selects the tenant;
-the password is forwarded verbatim to the tenant's upstream Kafka
-cluster, which is the sole auth authority. **kroxy stores no client
-secrets** and does not validate passwords itself.
+kroxy is a SASL/PLAIN **pass-through**. The SASL username on the wire
+is the tenant ID; the password is forwarded verbatim to the tenant's
+upstream Kafka cluster, which is the sole auth authority. **kroxy
+stores no client secrets** and does not validate passwords itself.
 
 Consequences:
 
-- Every tenant must be a real principal in the upstream broker
+- Every tenant ID must be a real principal in the upstream broker
   (declared in its JAAS file or auth backend, e.g. `kafka_jaas.conf`).
-- Unknown usernames are rejected at the proxy before any upstream
+- Unknown tenant IDs are rejected at the proxy before any upstream
   dial, returning a SASL authentication failure.
 - Passwords are held in memory for the duration of the client
   connection (to be able to reconnect to upstream on failure) and never
   written to logs.
 
 The only thing kroxy needs to know about a tenant is the mapping
-`username → (tenant_id, topic_prefix, upstream)`.
+`id → (topic_prefix, upstream)`.
 
 ## Admin RPC
 
@@ -219,11 +217,11 @@ admin:
 
 All methods live under the `Tenants` service.
 
-| Method           | Params                                                | Result                 |
-| ---------------- | ----------------------------------------------------- | ---------------------- |
-| `Tenants.Set`    | `username`, `tenant_id`, `topic_prefix`, `upstream`   | `{ "ok": true }`       |
-| `Tenants.Delete` | `username`                                            | `{ "ok": true }`       |
-| `Tenants.List`   | _(none)_                                              | `{ "tenants": [...] }` |
+| Method           | Params                                  | Result                 |
+| ---------------- | --------------------------------------- | ---------------------- |
+| `Tenants.Set`    | `id`, `topic_prefix`, `upstream`        | `{ "ok": true }`       |
+| `Tenants.Delete` | `id`                                    | `{ "ok": true }`       |
+| `Tenants.List`   | _(none)_                                | `{ "tenants": [...] }` |
 
 `Set` is create-only — to mutate an existing tenant, `Delete` then
 `Set` again.
@@ -232,8 +230,8 @@ All methods live under the `Tenants` service.
 
 | Code     | Meaning                                  |
 | -------- | ---------------------------------------- |
-| `-32011` | user already exists                      |
-| `-32012` | user not found                           |
+| `-32011` | tenant already exists                    |
+| `-32012` | tenant not found                         |
 | `-32013` | invalid request payload / missing field  |
 
 (Codes `-32001` … `-32004` are reserved by the JSON-RPC framework.)
@@ -248,8 +246,7 @@ curl -sS -X POST http://127.0.0.1:9095/rpc \
         "id": 1,
         "method": "Tenants.Set",
         "params": {
-          "username":     "alice",
-          "tenant_id":    "tenantA",
+          "id":           "tenantA",
           "topic_prefix": "tenantA.",
           "upstream":     "kafka:9093"
         }
@@ -261,8 +258,8 @@ A small helper script lives at `examples/admin-curl.sh`:
 ```bash
 ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh list
 ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh \
-  set alice tenantA "tenantA." kafka:9093
-ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh delete alice
+  set tenantA "tenantA." kafka:9093
+ADMIN=http://localhost:19095/rpc ./examples/admin-curl.sh delete tenantA
 ```
 
 ## Observability

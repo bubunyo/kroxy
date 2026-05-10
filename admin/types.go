@@ -9,19 +9,18 @@ package admin
 // SetParams is the payload for the Tenants.Set method. All fields are
 // required.
 //
-// kroxy stores no secrets: the SASL/PLAIN username is the tenant selector,
-// and the password supplied by the client is forwarded verbatim to the
-// tenant's upstream Kafka cluster.
+// kroxy stores no secrets: the tenant ID is the SASL/PLAIN identity
+// expected on the wire and the password supplied by the client is forwarded
+// verbatim to the tenant's upstream Kafka cluster.
 type SetParams struct {
-	Username    string `json:"username"`
-	TenantID    string `json:"tenant_id"`
+	ID          string `json:"id"`
 	TopicPrefix string `json:"topic_prefix"`
 	Upstream    string `json:"upstream"`
 }
 
 // DeleteParams is the payload for the Tenants.Delete method.
 type DeleteParams struct {
-	Username string `json:"username"`
+	ID string `json:"id"`
 }
 
 // OKResult is returned by mutating methods on success.
@@ -31,8 +30,7 @@ type OKResult struct {
 
 // TenantView is a description of a tenant returned by Tenants.List.
 type TenantView struct {
-	Username    string `json:"username"`
-	TenantID    string `json:"tenant_id"`
+	ID          string `json:"id"`
 	TopicPrefix string `json:"topic_prefix"`
 	Upstream    string `json:"upstream"`
 }

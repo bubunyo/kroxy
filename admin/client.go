@@ -58,9 +58,9 @@ func (c *Client) Set(ctx context.Context, p SetParams) error {
 }
 
 // Delete removes a tenant.
-func (c *Client) Delete(ctx context.Context, username string) error {
+func (c *Client) Delete(ctx context.Context, id string) error {
 	var out OKResult
-	return c.call(ctx, "Tenants.Delete", DeleteParams{Username: username}, &out)
+	return c.call(ctx, "Tenants.Delete", DeleteParams{ID: id}, &out)
 }
 
 // List returns a snapshot of all tenants.
@@ -122,7 +122,7 @@ func mapClientErr(e *rpcError) error {
 	case CodeNotFound:
 		return errors.Wrapf(resolver.ErrNotFound, "admin: %s", e.Message)
 	case CodeInvalid:
-		return errors.Wrapf(resolver.ErrInvalidUser, "admin: %s", e.Message)
+		return errors.Wrapf(resolver.ErrInvalidTenant, "admin: %s", e.Message)
 	default:
 		return errors.Errorf("admin: rpc error %d: %s", e.Code, e.Message)
 	}

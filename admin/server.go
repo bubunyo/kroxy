@@ -18,11 +18,11 @@ import (
 // go-rpc library claims -32001 through -32004 for transport-level conditions,
 // so we start our domain codes at -32011 to avoid any collision.
 const (
-	// CodeDuplicate is returned when a write would create a user that already
-	// exists.
+	// CodeDuplicate is returned when a write would create a tenant that
+	// already exists.
 	CodeDuplicate = -32011
-	// CodeNotFound is returned when an update or delete targets a user that
-	// does not exist.
+	// CodeNotFound is returned when a delete targets a tenant that does not
+	// exist.
 	CodeNotFound = -32012
 	// CodeInvalid is returned when a payload fails validation.
 	CodeInvalid = -32013
@@ -57,16 +57,15 @@ func (s *Service) Set(ctx context.Context, p *rpc.RequestParams) (any, error) {
 	if err := p.Bind(&in); err != nil {
 		return nil, rpc.NewError(CodeInvalid, err.Error())
 	}
-	user := resolver.MemoryUser{
-		Username:    in.Username,
-		TenantID:    in.TenantID,
+	tenant := resolver.Tenant{
+		ID:          in.ID,
 		TopicPrefix: in.TopicPrefix,
 		Upstream:    in.Upstream,
 	}
-	if err := s.store.Set(ctx, user); err != nil {
+	if err := s.store.Set(ctx, tenant); err != nil {
 		return nil, mapErr(err)
 	}
-	s.log.InfoContext(ctx, "tenant created", "username", in.Username, "tenant_id", in.TenantID)
+	s.log.InfoContext(ctx, "tenant created", "tenant_id", in.ID)
 	return OKResult{OK: true}, nil
 }
 
@@ -76,24 +75,23 @@ func (s *Service) Delete(ctx context.Context, p *rpc.RequestParams) (any, error)
 	if err := p.Bind(&in); err != nil {
 		return nil, rpc.NewError(CodeInvalid, err.Error())
 	}
-	if err := s.store.Delete(ctx, in.Username); err != nil {
+	if err := s.store.Delete(ctx, in.ID); err != nil {
 		return nil, mapErr(err)
 	}
-	s.log.InfoContext(ctx, "tenant deleted", "username", in.Username)
+	s.log.InfoContext(ctx, "tenant deleted", "tenant_id", in.ID)
 	return OKResult{OK: true}, nil
 }
 
 // List returns a snapshot of all tenants.
 func (s *Service) List(ctx context.Context, _ *rpc.RequestParams) (any, error) {
-	summaries, err := s.store.List(ctx)
+	tenants, err := s.store.List(ctx)
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	out := ListResult{Tenants: make([]TenantView, 0, len(summaries))}
-	for _, t := range summaries {
+	out := ListResult{Tenants: make([]TenantView, 0, len(tenants))}
+	for _, t := range tenants {
 		out.Tenants = append(out.Tenants, TenantView{
-			Username:    t.Username,
-			TenantID:    t.TenantID,
+			ID:          t.ID,
 			TopicPrefix: t.TopicPrefix,
 			Upstream:    t.Upstream,
 		})
@@ -107,7 +105,7 @@ func mapErr(err error) error {
 		return rpc.NewError(CodeDuplicate, err.Error())
 	case errors.Is(err, resolver.ErrNotFound):
 		return rpc.NewError(CodeNotFound, err.Error())
-	case errors.Is(err, resolver.ErrInvalidUser):
+	case errors.Is(err, resolver.ErrInvalidTenant):
 		return rpc.NewError(CodeInvalid, err.Error())
 	default:
 		return err

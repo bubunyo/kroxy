@@ -32,11 +32,10 @@ func newTestServer(t *testing.T) (*admin.Client, *resolver.MemoryResolver, func(
 	return client, store, ts.Close
 }
 
-func sampleSet(name string) admin.SetParams {
+func sampleSet(id string) admin.SetParams {
 	return admin.SetParams{
-		Username:    name,
-		TenantID:    name,
-		TopicPrefix: name + ".",
+		ID:          id,
+		TopicPrefix: id + ".",
 		Upstream:    "kafka:9092",
 	}
 }
@@ -57,9 +56,9 @@ func TestService_Set(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrDuplicate))
 
-	err = client.Set(ctx, admin.SetParams{Username: "bob"})
+	err = client.Set(ctx, admin.SetParams{ID: "bob"})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
+	assert.True(t, errors.Is(err, resolver.ErrInvalidTenant))
 }
 
 func TestService_Delete(t *testing.T) {
@@ -77,7 +76,7 @@ func TestService_Delete(t *testing.T) {
 
 	err = client.Delete(ctx, "")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, resolver.ErrInvalidUser))
+	assert.True(t, errors.Is(err, resolver.ErrInvalidTenant))
 }
 
 func TestService_List(t *testing.T) {
@@ -94,7 +93,7 @@ func TestService_List(t *testing.T) {
 	require.Len(t, got.Tenants, 2)
 
 	for _, tv := range got.Tenants {
-		assert.NotEmpty(t, tv.Username)
-		assert.NotEmpty(t, tv.TenantID)
+		assert.NotEmpty(t, tv.ID)
+		assert.NotEmpty(t, tv.TopicPrefix)
 	}
 }
