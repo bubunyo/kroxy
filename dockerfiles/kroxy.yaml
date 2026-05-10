@@ -4,13 +4,16 @@ advertised: "kroxy:9092"
 upstream:
   bootstrap: "kafka:9093"
 
-tenants:
-  - id: tenantA
-    topic_prefix: "tenantA."
-    upstream: "kafka:9093"
-  - id: tenantB
-    topic_prefix: "tenantB."
-    upstream: "kafka:9093"
+resolver:
+  type: memory
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+        upstream: "kafka:9093"
+      - id: tenantB
+        topic_prefix: "tenantB."
+        upstream: "kafka:9093"
 
 log:
   level: info

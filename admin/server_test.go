@@ -15,9 +15,9 @@ import (
 	"github.com/bubunyo/kroxy/resolver"
 )
 
-func newTestServer(t *testing.T) (*admin.Client, *resolver.MemoryResolver, func()) {
+func newTestServer(t *testing.T) (*admin.Client, resolver.Resolver, func()) {
 	t.Helper()
-	store, err := resolver.NewMemoryResolver(nil)
+	store, err := resolver.New(resolver.Config{})
 	require.NoError(t, err)
 
 	svc := admin.NewService(store, nil)

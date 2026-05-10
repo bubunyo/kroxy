@@ -19,11 +19,20 @@ func sampleTenant(id string) resolver.Tenant {
 	}
 }
 
+func newMemory(t *testing.T, tenants ...resolver.Tenant) resolver.Resolver {
+	t.Helper()
+	r, err := resolver.New(resolver.Config{
+		Type:   "memory",
+		Memory: resolver.MemoryConfig{Tenants: tenants},
+	})
+	require.NoError(t, err)
+	return r
+}
+
 func TestMemoryResolver_Get(t *testing.T) {
 	t.Parallel()
 
-	m, err := resolver.NewMemoryResolver([]resolver.Tenant{sampleTenant("alice")})
-	require.NoError(t, err)
+	m := newMemory(t, sampleTenant("alice"))
 
 	tests := []struct {
 		name    string
@@ -64,9 +73,11 @@ func TestMemoryResolver_Get(t *testing.T) {
 
 func TestNewMemoryResolver_Duplicate(t *testing.T) {
 	t.Parallel()
-	_, err := resolver.NewMemoryResolver([]resolver.Tenant{
-		sampleTenant("a"),
-		sampleTenant("a"),
+	_, err := resolver.New(resolver.Config{
+		Memory: resolver.MemoryConfig{Tenants: []resolver.Tenant{
+			sampleTenant("a"),
+			sampleTenant("a"),
+		}},
 	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrDuplicate))
@@ -74,19 +85,20 @@ func TestNewMemoryResolver_Duplicate(t *testing.T) {
 
 func TestNewMemoryResolver_Invalid(t *testing.T) {
 	t.Parallel()
-	_, err := resolver.NewMemoryResolver([]resolver.Tenant{{ID: "a"}})
+	_, err := resolver.New(resolver.Config{
+		Memory: resolver.MemoryConfig{Tenants: []resolver.Tenant{{ID: "a"}}},
+	})
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrInvalidTenant))
 }
 
 func TestMemoryResolver_Set(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver(nil)
-	require.NoError(t, err)
+	m := newMemory(t)
 
 	require.NoError(t, m.Set(context.Background(), sampleTenant("alice")))
 
-	err = m.Set(context.Background(), sampleTenant("alice"))
+	err := m.Set(context.Background(), sampleTenant("alice"))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrDuplicate))
 
@@ -101,12 +113,11 @@ func TestMemoryResolver_Set(t *testing.T) {
 
 func TestMemoryResolver_Delete(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver([]resolver.Tenant{sampleTenant("alice")})
-	require.NoError(t, err)
+	m := newMemory(t, sampleTenant("alice"))
 
 	require.NoError(t, m.Delete(context.Background(), "alice"))
 
-	_, err = m.Get(context.Background(), "alice")
+	_, err := m.Get(context.Background(), "alice")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, resolver.ErrUnauthorized))
 
@@ -121,11 +132,7 @@ func TestMemoryResolver_Delete(t *testing.T) {
 
 func TestMemoryResolver_List_Detached(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver([]resolver.Tenant{
-		sampleTenant("alice"),
-		sampleTenant("bob"),
-	})
-	require.NoError(t, err)
+	m := newMemory(t, sampleTenant("alice"), sampleTenant("bob"))
 
 	got, err := m.List(context.Background())
 	require.NoError(t, err)
@@ -146,8 +153,7 @@ func TestMemoryResolver_List_Detached(t *testing.T) {
 
 func TestMemoryResolver_ConcurrentReadDuringWrite(t *testing.T) {
 	t.Parallel()
-	m, err := resolver.NewMemoryResolver([]resolver.Tenant{sampleTenant("alice")})
-	require.NoError(t, err)
+	m := newMemory(t, sampleTenant("alice"))
 
 	ctx := context.Background()
 	var wg sync.WaitGroup

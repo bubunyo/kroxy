@@ -12,13 +12,13 @@ import (
 
 // Config is the top-level configuration loaded from YAML.
 type Config struct {
-	Listen     string         `yaml:"listen"`
-	Advertised string         `yaml:"advertised"`
-	Upstream   UpstreamConfig `yaml:"upstream"`
-	Tenants    []TenantConfig `yaml:"tenants"`
-	Log        LogConfig      `yaml:"log"`
-	Metrics    MetricsConfig  `yaml:"metrics"`
-	Admin      AdminConfig    `yaml:"admin"`
+	Listen     string          `yaml:"listen"`
+	Advertised string          `yaml:"advertised"`
+	Upstream   UpstreamConfig  `yaml:"upstream"`
+	Resolver   resolver.Config `yaml:"resolver"`
+	Log        LogConfig       `yaml:"log"`
+	Metrics    MetricsConfig   `yaml:"metrics"`
+	Admin      AdminConfig     `yaml:"admin"`
 }
 
 // MetricsConfig configures the Prometheus metrics endpoint.
@@ -39,16 +39,6 @@ type AdminConfig struct {
 // UpstreamConfig describes the shared upstream Kafka cluster.
 type UpstreamConfig struct {
 	Bootstrap string `yaml:"bootstrap"`
-}
-
-// TenantConfig is a single tenant entry. kroxy stores no client secrets;
-// the tenant ID is the SASL/PLAIN identity expected on the wire and the
-// password supplied by the client is forwarded verbatim to the tenant's
-// upstream Kafka cluster.
-type TenantConfig struct {
-	ID          string `yaml:"id"`
-	TopicPrefix string `yaml:"topic_prefix"`
-	Upstream    string `yaml:"upstream"`
 }
 
 // LogConfig configures the slog handler.
@@ -90,6 +80,15 @@ func (c *Config) applyDefaults() {
 	if c.Admin.Listen == "" {
 		c.Admin.Listen = "127.0.0.1:9095"
 	}
+	if c.Resolver.Type == "" {
+		c.Resolver.Type = "memory"
+	}
+	// Fill in tenant.Upstream from the shared bootstrap when omitted.
+	for i := range c.Resolver.Memory.Tenants {
+		if c.Resolver.Memory.Tenants[i].Upstream == "" {
+			c.Resolver.Memory.Tenants[i].Upstream = c.Upstream.Bootstrap
+		}
+	}
 }
 
 func (c *Config) validate() error {
@@ -99,16 +98,13 @@ func (c *Config) validate() error {
 	if c.Upstream.Bootstrap == "" {
 		return errors.New("config: upstream.bootstrap is required")
 	}
-	if len(c.Tenants) == 0 && !c.Admin.Enabled {
-		return errors.New("config: tenants must contain at least one entry (or enable the admin RPC)")
-	}
-	for i, t := range c.Tenants {
-		if t.ID == "" {
-			return errors.Errorf("config: tenants[%d].id is required", i)
+	switch c.Resolver.Type {
+	case "memory":
+		if err := c.validateMemoryResolver(); err != nil {
+			return err
 		}
-		if t.TopicPrefix == "" {
-			return errors.Errorf("config: tenants[%d].topic_prefix is required", i)
-		}
+	default:
+		return errors.Errorf("config: unknown resolver.type %q", c.Resolver.Type)
 	}
 	if c.Admin.Enabled {
 		if _, _, err := net.SplitHostPort(c.Admin.Listen); err != nil {
@@ -118,20 +114,18 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// ResolverTenants maps the tenant list onto resolver.Tenant values, applying
-// the default upstream where a tenant doesn't override it.
-func (c *Config) ResolverTenants() []resolver.Tenant {
-	out := make([]resolver.Tenant, len(c.Tenants))
-	for i, t := range c.Tenants {
-		upstream := t.Upstream
-		if upstream == "" {
-			upstream = c.Upstream.Bootstrap
+func (c *Config) validateMemoryResolver() error {
+	tenants := c.Resolver.Memory.Tenants
+	if len(tenants) == 0 && !c.Admin.Enabled {
+		return errors.New("config: resolver.memory.tenants must contain at least one entry (or enable the admin RPC)")
+	}
+	for i, t := range tenants {
+		if t.ID == "" {
+			return errors.Errorf("config: resolver.memory.tenants[%d].id is required", i)
 		}
-		out[i] = resolver.Tenant{
-			ID:          t.ID,
-			TopicPrefix: t.TopicPrefix,
-			Upstream:    upstream,
+		if t.TopicPrefix == "" {
+			return errors.Errorf("config: resolver.memory.tenants[%d].topic_prefix is required", i)
 		}
 	}
-	return out
+	return nil
 }

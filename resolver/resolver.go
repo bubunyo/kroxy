@@ -29,9 +29,9 @@ var ErrInvalidTenant = errors.New("invalid tenant")
 // cluster. kroxy stores no client secrets: the SASL/PLAIN password supplied
 // by the client is forwarded verbatim to the tenant's upstream.
 type Tenant struct {
-	ID          string
-	TopicPrefix string
-	Upstream    string
+	ID          string `yaml:"id"`
+	TopicPrefix string `yaml:"topic_prefix"`
+	Upstream    string `yaml:"upstream"`
 }
 
 // Resolver looks up the Tenant associated with a tenant ID and exposes

@@ -15,8 +15,6 @@ import (
 // MechanismPlain is the only mechanism advertised and accepted by the proxy.
 const MechanismPlain = "PLAIN"
 
-const redacted = "[REDACTED]"
-
 // PlainCredentials are the (authzid, authcid, password) tuple decoded from a
 // SASL/PLAIN authentication payload.
 type PlainCredentials struct {
@@ -27,8 +25,8 @@ type PlainCredentials struct {
 
 // String implements fmt.Stringer with the password redacted.
 func (p PlainCredentials) String() string {
-	return fmt.Sprintf("PlainCredentials{Authzid:%q Username:%q Password:%s}",
-		p.Authzid, p.Username, redacted)
+	return fmt.Sprintf("PlainCredentials{Authzid:%q Username:%q}",
+		p.Authzid, p.Username)
 }
 
 // GoString implements fmt.GoStringer so %#v is also safe.
@@ -41,7 +39,6 @@ func (p PlainCredentials) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("authzid", p.Authzid),
 		slog.String("username", p.Username),
-		slog.String("password", redacted),
 	)
 }
 

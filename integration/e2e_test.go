@@ -40,9 +40,11 @@ const (
 func startProxy(t *testing.T, upstream string) (addr string, stop func()) {
 	t.Helper()
 
-	res, err := resolver.NewMemoryResolver([]resolver.Tenant{
-		{ID: tenantA, TopicPrefix: tenantA + ".", Upstream: upstream},
-		{ID: tenantB, TopicPrefix: tenantB + ".", Upstream: upstream},
+	res, err := resolver.New(resolver.Config{
+		Memory: resolver.MemoryConfig{Tenants: []resolver.Tenant{
+			{ID: tenantA, TopicPrefix: tenantA + ".", Upstream: upstream},
+			{ID: tenantB, TopicPrefix: tenantB + ".", Upstream: upstream},
+		}},
 	})
 	require.NoError(t, err)
 
@@ -222,7 +224,7 @@ func TestEndToEnd_AdminSetThenAuth(t *testing.T) {
 	upstream, stopK := startKafkaSASL(ctx, t)
 	t.Cleanup(stopK)
 
-	store, err := resolver.NewMemoryResolver(nil)
+	store, err := resolver.New(resolver.Config{})
 	require.NoError(t, err)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

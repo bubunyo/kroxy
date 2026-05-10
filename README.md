@@ -146,10 +146,13 @@ advertised: "kroxy:9092"      # what kroxy advertises as broker 0
 upstream:
   bootstrap: "kafka:9093"     # default upstream for tenants that omit it
 
-tenants:
-  - id: tenantA
-    topic_prefix: "tenantA."
-    upstream: "kafka:9093"    # optional; falls back to upstream.bootstrap
+resolver:
+  type: memory                # only "memory" is supported in v1
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+        upstream: "kafka:9093"  # optional; falls back to upstream.bootstrap
 
 log:
   level: info                 # debug | info | warn | error
@@ -170,8 +173,10 @@ Notes:
   responses, so clients must be able to reach the proxy at this address.
 - `upstream.bootstrap` is mandatory and is used as the default upstream
   for any tenant that doesn't specify its own `upstream`.
-- The `tenants` list may be empty **only if** the admin RPC is
-  enabled — otherwise the proxy has nothing to authorise against.
+- `resolver.type` defaults to `"memory"` (the only backend in v1; the
+  field exists as an extension point for future backends).
+- The `resolver.memory.tenants` list may be empty **only if** the admin
+  RPC is enabled — otherwise the proxy has nothing to authorise against.
 - A tenant's `id` and `topic_prefix` are both required.
 
 ## Authentication model

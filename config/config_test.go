@@ -33,9 +33,11 @@ func TestLoad(t *testing.T) {
 advertised: "kroxy:9092"
 upstream:
   bootstrap: "kafka:9092"
-tenants:
-  - id: tenantA
-    topic_prefix: "tenantA."
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
 `,
 			check: func(t *testing.T, c config.Config) {
 				assert.Equal(t, ":9092", c.Listen)
@@ -43,11 +45,40 @@ tenants:
 				assert.Equal(t, "json", c.Log.Format)
 				assert.Equal(t, "127.0.0.1:9095", c.Admin.Listen)
 				assert.False(t, c.Admin.Enabled)
-				tenants := c.ResolverTenants()
+				assert.Equal(t, "memory", c.Resolver.Type)
+				tenants := c.Resolver.Memory.Tenants
 				require.Len(t, tenants, 1)
 				assert.Equal(t, "tenantA", tenants[0].ID)
-				assert.Equal(t, "kafka:9092", tenants[0].Upstream)
+				assert.Equal(t, "kafka:9092", tenants[0].Upstream, "should fall back to upstream.bootstrap")
 			},
+		},
+		{
+			name: "explicit resolver type",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+resolver:
+  type: memory
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+        upstream: "other:9092"
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.Equal(t, "memory", c.Resolver.Type)
+				assert.Equal(t, "other:9092", c.Resolver.Memory.Tenants[0].Upstream)
+			},
+		},
+		{
+			name: "unknown resolver type",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+resolver:
+  type: postgres
+`,
+			wantErr: true,
 		},
 		{
 			name: "admin enabled with no tenants",
@@ -60,7 +91,8 @@ admin:
 			check: func(t *testing.T, c config.Config) {
 				assert.True(t, c.Admin.Enabled)
 				assert.Equal(t, "127.0.0.1:9095", c.Admin.Listen)
-				assert.Empty(t, c.ResolverTenants())
+				assert.Empty(t, c.Resolver.Memory.Tenants)
+				assert.Equal(t, "memory", c.Resolver.Type)
 			},
 		},
 		{
@@ -97,6 +129,18 @@ admin:
 			yaml: `
 advertised: "kroxy:9092"
 upstream: { bootstrap: "k:9092" }
+`,
+			wantErr: true,
+		},
+		{
+			name: "tenant missing id",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+resolver:
+  memory:
+    tenants:
+      - topic_prefix: "tenantA."
 `,
 			wantErr: true,
 		},
