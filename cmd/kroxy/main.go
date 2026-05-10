@@ -16,6 +16,9 @@ import (
 	"github.com/bubunyo/kroxy/resolver"
 )
 
+// version is overridden at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "kroxy: %v\n", err)
@@ -24,9 +27,18 @@ func main() {
 }
 
 func run() error {
-	var cfgPath string
+	var (
+		cfgPath     string
+		showVersion bool
+	)
 	flag.StringVar(&cfgPath, "config", "config.yaml", "path to YAML config")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println(version)
+		return nil
+	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -34,6 +46,7 @@ func run() error {
 	}
 
 	log := observability.NewLogger(os.Stdout, cfg.Log.Level, cfg.Log.Format)
+	log.Info("kroxy starting", "version", version)
 
 	res, err := resolver.New(cfg.Resolver)
 	if err != nil {

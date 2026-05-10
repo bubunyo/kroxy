@@ -8,7 +8,21 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+      - name: go test (race)
+        run: go test ./... -race -count=1
+      - name: go test (integration, race)
+        run: go test -tags=integration ./integration/... -race -count=1 -timeout=10m
+
   release:
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,14 +45,17 @@ jobs:
           for t in "${targets[@]}"; do
             os="${t% *}"
             arch="${t#* }"
-            out="kroxy-${VERSION}-${os}-${arch}"
-            echo "==> building $out"
+            name="kroxy-${VERSION}-${os}-${arch}"
+            stage="dist/${name}"
+            echo "==> building ${name}"
+            mkdir -p "${stage}"
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
               go build -trimpath \
                 -ldflags "-s -w -X main.version=${VERSION}" \
-                -o "dist/${out}" ./cmd/kroxy
-            tar -C dist -czf "dist/${out}.tar.gz" "${out}"
-            rm "dist/${out}"
+                -o "${stage}/kroxy" ./cmd/kroxy
+            cp LICENSE README.md "${stage}/"
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+            rm -rf "${stage}"
           done
           (cd dist && sha256sum *.tar.gz > checksums.txt)
           ls -la dist
