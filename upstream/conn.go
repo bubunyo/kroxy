@@ -78,8 +78,9 @@ func DialForSCRAM(ctx context.Context, addr, mechanism string) (*Conn, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "DialForSCRAM")
 	}
-	// Leave the deadline cleared; per-request deadlines will be applied
-	// during RelaySASLAuthenticate via applyRequestDeadline.
+	// Leave the deadline cleared; RelaySASLAuthenticate applies a
+	// per-request deadline via applyRequestDeadline before each round
+	// trip so a stalled upstream cannot block indefinitely.
 	if err := c.nc.SetDeadline(time.Time{}); err != nil {
 		_ = c.nc.Close()
 		return nil, errors.Wrap(err, "DialForSCRAM")
@@ -268,6 +269,9 @@ func (c *Conn) RelaySASLAuthenticate(payload []byte) (respPayload []byte, errCod
 	req := kmsg.NewPtrSASLAuthenticateRequest()
 	req.SetVersion(1)
 	req.SASLAuthBytes = payload
+	if err := c.applyRequestDeadline(); err != nil {
+		return nil, 0, "", errors.Wrap(err, "RelaySASLAuthenticate")
+	}
 	body, err := c.directRoundTrip(req, protocol.SaslAuthenticateKey, 1)
 	if err != nil {
 		return nil, 0, "", errors.Wrap(err, "RelaySASLAuthenticate")

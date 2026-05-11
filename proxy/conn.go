@@ -283,14 +283,21 @@ func (c *conn) handleSaslHandshake(hdr protocol.RequestHeader, body []byte) erro
 }
 
 // observeHandshake records the result of a SASL handshake or authenticate
-// step against the SaslHandshakeTotal counter, if metrics are enabled. mech
-// may be the empty string (no mechanism known yet); it's reported as
-// "unknown" in that case.
+// step against the SaslHandshakeTotal counter, if metrics are enabled.
+//
+// The mechanism label is bounded to a fixed allow-list (PLAIN,
+// SCRAM-SHA-256, SCRAM-SHA-512); any other value — including the empty
+// string and arbitrary client-supplied strings from a SaslHandshake
+// request — is normalized to "unknown" so a hostile or buggy client
+// cannot create unbounded Prometheus label cardinality.
 func (c *conn) observeHandshake(mech, result string) {
 	if c.metrics == nil {
 		return
 	}
-	if mech == "" {
+	switch mech {
+	case auth.MechanismPlain, auth.MechanismSCRAMSHA256, auth.MechanismSCRAMSHA512:
+		// allowed
+	default:
 		mech = "unknown"
 	}
 	c.metrics.SaslHandshakeTotal.WithLabelValues(mech, result).Inc()
