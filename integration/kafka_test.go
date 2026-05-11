@@ -17,7 +17,12 @@ import (
 // JAAS file declaring the SASL/PLAIN principals the test broker accepts.
 //
 // Inter-broker / admin uses "broker" / "brokerpw"; integration tests
-// authenticate as "tenantA", "tenantB", "carol".
+// authenticate as "tenantA", "tenantB", "carol" via PLAIN. SCRAM-SHA-256
+// and SCRAM-SHA-512 credentials for the same usernames are provisioned
+// once the broker is up by the starter script via kafka-configs.sh
+// (see copyStarterScript) using the broker admin principal over the
+// SASL_PLAINTEXT listener. SCRAM principals do not appear in this JAAS
+// file.
 const integrationJAAS = `KafkaServer {
     org.apache.kafka.common.security.plain.PlainLoginModule required
     username="broker"
@@ -26,6 +31,7 @@ const integrationJAAS = `KafkaServer {
     user_tenantA="tenantA"
     user_tenantB="tenantB"
     user_carol="carolpw";
+    org.apache.kafka.common.security.scram.ScramLoginModule required;
 };
 KafkaClient {
     org.apache.kafka.common.security.plain.PlainLoginModule required
@@ -56,12 +62,12 @@ func startKafkaSASL(ctx context.Context, t *testing.T) (string, func()) {
 			Env: map[string]string{
 				"KAFKA_NODE_ID":                                  "1",
 				"KAFKA_PROCESS_ROLES":                            "broker,controller",
-				"KAFKA_LISTENERS":                                "SASL_PLAINTEXT://0.0.0.0:9093,CONTROLLER://0.0.0.0:9094",
-				"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":           "SASL_PLAINTEXT:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT",
-				"KAFKA_INTER_BROKER_LISTENER_NAME":               "SASL_PLAINTEXT",
+				"KAFKA_LISTENERS":                                "SASL_PLAINTEXT://0.0.0.0:9093,INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094",
+				"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":           "SASL_PLAINTEXT:SASL_PLAINTEXT,INTERNAL:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT",
+				"KAFKA_INTER_BROKER_LISTENER_NAME":               "INTERNAL",
 				"KAFKA_CONTROLLER_LISTENER_NAMES":                "CONTROLLER",
 				"KAFKA_CONTROLLER_QUORUM_VOTERS":                 "1@localhost:9094",
-				"KAFKA_SASL_ENABLED_MECHANISMS":                  "PLAIN",
+				"KAFKA_SASL_ENABLED_MECHANISMS":                  "PLAIN,SCRAM-SHA-256,SCRAM-SHA-512",
 				"KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL":     "PLAIN",
 				"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR":         "1",
 				"KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR": "1",
@@ -82,7 +88,7 @@ func startKafkaSASL(ctx context.Context, t *testing.T) (string, func()) {
 			LifecycleHooks: []testcontainers.ContainerLifecycleHooks{{
 				PostStarts: []testcontainers.ContainerHook{copyStarterScript(externalPort)},
 			}},
-			WaitingFor: wait.ForLog("Kafka Server started").WithStartupTimeout(2 * time.Minute),
+			WaitingFor: wait.ForLog("KROXY_SCRAM_READY").WithStartupTimeout(3 * time.Minute),
 		},
 		Started: true,
 	}
@@ -118,8 +124,55 @@ func copyStarterScript(externalPort string) testcontainers.ContainerHook {
 		}
 		script := fmt.Sprintf(`#!/bin/bash
 set -e
-export KAFKA_ADVERTISED_LISTENERS="SASL_PLAINTEXT://%s:%s"
-exec /etc/kafka/docker/run
+export KAFKA_ADVERTISED_LISTENERS="SASL_PLAINTEXT://%s:%s,INTERNAL://localhost:9092"
+
+# Background the official wrapper so the broker comes up with PLAIN auth,
+# then provision SCRAM credentials over the running INTERNAL listener
+# using the broker admin principal. We can't bootstrap SCRAM users at
+# format time because the docker wrapper formats storage itself with its
+# own arguments and ignores any prior format. We use the INTERNAL
+# listener (advertised as localhost:9092 inside the container) so the
+# admin client can reach the broker without going through the host port
+# mapping.
+/etc/kafka/docker/run &
+BROKER_PID=$!
+
+# Admin client config: PLAIN as the inter-broker user.
+ADMIN_CFG=/tmp/admin.properties
+cat >"$ADMIN_CFG" <<EOF
+security.protocol=SASL_PLAINTEXT
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="broker" password="brokerpw";
+EOF
+
+# Wait for broker to accept admin requests on the internal listener.
+for i in $(seq 1 120); do
+  if /opt/kafka/bin/kafka-broker-api-versions.sh \
+      --bootstrap-server localhost:9092 \
+      --command-config "$ADMIN_CFG" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+# Provision SCRAM credentials for each tenant on both digests. The
+# admin API rejects altering the same user twice in one request, so
+# each digest is added in a separate call.
+for entry in "tenantA:tenantA" "tenantB:tenantB" "carol:carolpw"; do
+  user="${entry%%:*}"
+  pw="${entry##*:}"
+  for mech in SCRAM-SHA-256 SCRAM-SHA-512; do
+    /opt/kafka/bin/kafka-configs.sh \
+        --bootstrap-server localhost:9092 \
+        --command-config "$ADMIN_CFG" \
+        --alter \
+        --add-config "$mech=[password=$pw]" \
+        --entity-type users --entity-name "$user"
+  done
+done
+
+echo "KROXY_SCRAM_READY"
+wait $BROKER_PID
 `, host, hostPort.Port())
 		return c.CopyToContainer(ctx, []byte(script), starterPath, 0o755)
 	}

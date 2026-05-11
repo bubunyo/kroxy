@@ -44,6 +44,15 @@ type fakeBroker struct {
 	lastCoordKey string
 	// Last JoinGroup group ID the broker saw, post-decode.
 	lastJoinGroup string
+
+	// SCRAM relay support. When scramResponses is non-nil, the broker
+	// returns these payloads on successive SaslAuthenticate requests
+	// instead of the single-shot PLAIN behaviour. scramFailOnRound is
+	// 1-based; 0 disables the failure injection.
+	scramResponses    [][]byte
+	scramFailOnRound  int
+	scramFailCode     int16
+	receivedSaslBytes [][]byte
 }
 
 func newFakeBroker(t *testing.T) *fakeBroker {
@@ -73,6 +82,7 @@ func (b *fakeBroker) serve() {
 func (b *fakeBroker) handle(c net.Conn) {
 	defer c.Close()
 	authed := false
+	scramRound := 0
 	for {
 		frame, err := protocol.ReadFrame(c)
 		if err != nil {
@@ -96,7 +106,7 @@ func (b *fakeBroker) handle(c net.Conn) {
 		case protocol.SaslHandshakeKey:
 			resp := kmsg.NewPtrSASLHandshakeResponse()
 			resp.SetVersion(hdr.APIVersion)
-			resp.SupportedMechanisms = []string{"PLAIN"}
+			resp.SupportedMechanisms = []string{"PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
 			b.write(c, resp, hdr)
 		case protocol.SaslAuthenticateKey:
 			req := kmsg.NewPtrSASLAuthenticateRequest()
@@ -104,11 +114,28 @@ func (b *fakeBroker) handle(c net.Conn) {
 			_ = req.ReadFrom(body)
 			b.mu.Lock()
 			b.gotCreds = string(req.SASLAuthBytes)
+			b.receivedSaslBytes = append(b.receivedSaslBytes, append([]byte(nil), req.SASLAuthBytes...))
+			scramMode := b.scramResponses != nil
 			b.mu.Unlock()
+
 			resp := kmsg.NewPtrSASLAuthenticateResponse()
 			resp.SetVersion(hdr.APIVersion)
+			if scramMode {
+				scramRound++
+				if b.scramFailOnRound > 0 && scramRound == b.scramFailOnRound {
+					resp.ErrorCode = b.scramFailCode
+					m := "fake broker rejected"
+					resp.ErrorMessage = &m
+				} else if scramRound-1 < len(b.scramResponses) {
+					resp.SASLAuthBytes = b.scramResponses[scramRound-1]
+				}
+				if scramRound >= len(b.scramResponses) {
+					authed = true
+				}
+			} else {
+				authed = true
+			}
 			b.write(c, resp, hdr)
-			authed = true
 		default:
 			if !authed {
 				return
