@@ -169,3 +169,37 @@ func TestTLS_PlaintextClientRejected(t *testing.T) {
 	_, err = protocol.ReadFrame(c)
 	require.Error(t, err, "plaintext client must not receive a valid frame from a TLS listener")
 }
+
+// TestTLS_BadClientDoesNotKillServer asserts a failed/garbage connection does
+// not tear down the listener: a subsequent valid TLS client still completes the
+// SASL flow.
+func TestTLS_BadClientDoesNotKillServer(t *testing.T) {
+	t.Parallel()
+
+	addr, pool, stop := startTestServerTLS(t)
+	defer stop()
+
+	// A bad client: plaintext garbage against the TLS listener. Its handshake
+	// fails in the per-connection handler, not the accept loop.
+	bad, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	_, _ = bad.Write([]byte("not a tls client hello"))
+	_ = bad.Close()
+
+	// The server must still serve a well-behaved TLS client.
+	good, err := tls.Dial("tcp", addr, &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12})
+	require.NoError(t, err)
+	defer good.Close()
+	require.NoError(t, good.SetDeadline(time.Now().Add(3*time.Second)))
+
+	avReq := kmsg.NewPtrApiVersionsRequest()
+	avReq.SetVersion(3)
+	avReq.ClientSoftwareName = "test"
+	avReq.ClientSoftwareVersion = "0"
+	sendRequest(t, good, avReq, 1, "test")
+	avResp := kmsg.NewPtrApiVersionsResponse()
+	avResp.SetVersion(3)
+	cid := recvResponse(t, good, avResp, protocol.ApiVersionsKey, 3)
+	assert.Equal(t, int32(1), cid)
+	assert.Equal(t, int16(0), avResp.ErrorCode)
+}

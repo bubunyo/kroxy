@@ -43,8 +43,18 @@ func NewServer(cfg ServerConfig, r resolver.Resolver, m *observability.Metrics, 
 	return &Server{cfg: cfg, resolver: r, metrics: m, log: log}
 }
 
-// Run begins accepting connections until ctx is cancelled or the listener
-// returns a non-temporary error. It blocks the caller.
+// maxAcceptBackoff caps the retry delay applied after a transient Accept error.
+const maxAcceptBackoff = time.Second
+
+// Run begins accepting connections until ctx is cancelled or the listener is
+// closed. It blocks the caller.
+//
+// Transient Accept errors (fd exhaustion, a connection reset between accept and
+// return, etc.) are logged and retried with a capped exponential backoff rather
+// than treated as fatal — a single misbehaving client must never tear down the
+// proxy. When TLS is enabled the handshake is deferred to the first read, so a
+// failed handshake surfaces per-connection in handle (logged, non-fatal), not
+// here.
 func (s *Server) Run(ctx context.Context) error {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", s.cfg.Listen)
@@ -62,19 +72,35 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
+	var backoff time.Duration
 	for {
 		c, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			// Clean shutdown: ctx cancelled or the listener was closed.
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				s.wg.Wait()
 				return nil
 			}
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				continue
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else {
+				backoff *= 2
 			}
-			return pkgerrors.Wrap(err, "Run")
+			if backoff > maxAcceptBackoff {
+				backoff = maxAcceptBackoff
+			}
+			s.log.WarnContext(ctx, "accept error; retrying", "err", err, "delay", backoff.String())
+			t := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				s.wg.Wait()
+				return nil
+			case <-t.C:
+			}
+			continue
 		}
+		backoff = 0
 		s.wg.Go(func() { s.handle(ctx, c) })
 	}
 }
