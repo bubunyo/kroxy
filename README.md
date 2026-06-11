@@ -150,6 +150,8 @@ tls:                          # optional; omit for a plaintext listener
 
 upstream:
   bootstrap: "kafka:9093"     # default upstream for tenants that omit it
+  sasl:                       # optional; omit for PLAIN pass-through
+    mechanism: SCRAM-SHA-256  # authenticate PLAIN clients to the broker via SCRAM
 
 resolver:
   type: memory                # only "memory" is supported in v1
@@ -188,6 +190,11 @@ Notes:
   connection is unaffected. Omit the block for a plaintext listener. Server-side
   TLS only — clients are not asked for a certificate, and the keypair is loaded
   once at startup (restart to rotate).
+- `upstream.sasl.mechanism` is optional. Leave it empty (the default) to
+  forward PLAIN clients' credentials to the broker verbatim. Set it to
+  `SCRAM-SHA-256` or `SCRAM-SHA-512` to make kroxy authenticate PLAIN clients
+  to the upstream broker with that SCRAM mechanism instead — see
+  [PLAIN→SCRAM translation](#plainscram-translation).
 
 ## Authentication model
 
@@ -221,6 +228,22 @@ Consequences:
 
 The only thing kroxy needs to know about a tenant is the mapping
 `id → (topic_prefix, upstream)`.
+
+### PLAIN→SCRAM translation
+
+Some clients can only speak SASL/PLAIN, while the broker provisions
+per-tenant **SCRAM** credentials and no static PLAIN principals. Setting
+`upstream.sasl.mechanism` to a SCRAM mechanism bridges the two: a client
+authenticates to kroxy with PLAIN, and kroxy authenticates to the upstream
+broker with SCRAM, computing the proof itself from the tenant ID and the
+client-supplied password. The tenant's SCRAM password must therefore equal
+the PLAIN password the client sends.
+
+This is distinct from the pass-through SCRAM mechanism above. It applies
+**only** to clients that connect with PLAIN — kroxy needs the plaintext
+password to compute a SCRAM proof, and only PLAIN reveals it. Clients that
+already speak SCRAM are relayed verbatim regardless of this setting, and when
+`upstream.sasl.mechanism` is empty kroxy holds no secret and changes nothing.
 
 ## Admin RPC
 

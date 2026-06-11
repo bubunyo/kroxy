@@ -35,6 +35,10 @@ type ServerConfig struct {
 	// TLS, when non-nil, terminates TLS on the client-facing listener. A nil
 	// value leaves the listener plaintext.
 	TLS *tls.Config
+	// UpstreamSASLMechanism, when set to a SCRAM mechanism, makes kroxy
+	// authenticate PLAIN clients to the upstream broker with that mechanism
+	// (PLAIN->SCRAM translation). Empty means forward PLAIN verbatim.
+	UpstreamSASLMechanism string
 }
 
 // NewServer constructs a Server. It does not start listening; call Run.

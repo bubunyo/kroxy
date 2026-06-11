@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/bubunyo/kroxy/auth"
 	"github.com/bubunyo/kroxy/resolver"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
@@ -67,7 +68,23 @@ type AdminConfig struct {
 
 // UpstreamConfig describes the shared upstream Kafka cluster.
 type UpstreamConfig struct {
-	Bootstrap string `yaml:"bootstrap"`
+	Bootstrap string             `yaml:"bootstrap"`
+	SASL      UpstreamSASLConfig `yaml:"sasl"`
+}
+
+// UpstreamSASLConfig controls how kroxy authenticates to the upstream broker
+// for clients that connect with SASL/PLAIN.
+//
+// When Mechanism is empty (the default), kroxy forwards the client's PLAIN
+// credentials to the broker verbatim — pure pass-through. When Mechanism is a
+// SCRAM mechanism, kroxy instead authenticates upstream with that mechanism,
+// computing the SCRAM proof itself from the tenant ID and the client-supplied
+// PLAIN password. This lets PLAIN-only clients reach a broker that only
+// provisions per-tenant SCRAM credentials, without kroxy holding any static
+// secret. It has no effect on clients that already speak SCRAM (those are
+// relayed verbatim).
+type UpstreamSASLConfig struct {
+	Mechanism string `yaml:"mechanism"`
 }
 
 // LogConfig configures the slog handler.
@@ -142,6 +159,9 @@ func (c *Config) validate() error {
 	}
 	if c.TLS.Enabled && (c.TLS.CertFile == "" || c.TLS.KeyFile == "") {
 		return errors.New("config: tls.cert_file and tls.key_file are required when tls.enabled")
+	}
+	if m := c.Upstream.SASL.Mechanism; m != "" && !auth.IsSCRAMMechanism(m) {
+		return errors.Errorf("config: upstream.sasl.mechanism %q is not supported (use SCRAM-SHA-256 or SCRAM-SHA-512, or leave empty for PLAIN pass-through)", m)
 	}
 	return nil
 }

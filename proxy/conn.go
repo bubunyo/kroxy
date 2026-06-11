@@ -45,7 +45,7 @@ type conn struct {
 	log      *slog.Logger
 
 	state                connState
-	mechanism            string
+	clientMechanism      string // SASL mechanism the client used to authenticate to kroxy
 	tenant               resolver.Tenant
 	password             string // populated only on the PLAIN path
 	upstream             *upstream.Conn
@@ -201,11 +201,29 @@ func (c *conn) forwardRewritten(hdr protocol.RequestHeader, body []byte) error {
 	return h(hdr, body)
 }
 
+// shouldTranslatePlainToSCRAM reports whether this connection's upstream dial
+// must bridge a PLAIN client to a SCRAM broker. It is true only when the
+// client authenticated to kroxy with PLAIN (so kroxy holds the plaintext
+// password needed to compute a SCRAM proof) and kroxy is configured with an
+// upstream SCRAM mechanism. Clients that already speak SCRAM authenticate
+// during handshake via the relay path and never reach ensureUpstream.
+func (c *conn) shouldTranslatePlainToSCRAM() bool {
+	return c.clientMechanism == auth.MechanismPlain && auth.IsSCRAMMechanism(c.cfg.UpstreamSASLMechanism)
+}
+
 func (c *conn) ensureUpstream() error {
 	if c.upstream != nil {
 		return nil
 	}
-	up, err := upstream.Dial(c.ctx, c.tenant.Upstream, c.tenant.ID, c.password)
+	var (
+		up  *upstream.Conn
+		err error
+	)
+	if c.shouldTranslatePlainToSCRAM() {
+		up, err = upstream.DialSCRAM(c.ctx, c.tenant.Upstream, c.cfg.UpstreamSASLMechanism, c.tenant.ID, c.password)
+	} else {
+		up, err = upstream.Dial(c.ctx, c.tenant.Upstream, c.tenant.ID, c.password)
+	}
 	if err != nil {
 		if c.metrics != nil {
 			c.metrics.UpstreamErrorTotal.WithLabelValues("dial").Inc()
@@ -213,7 +231,11 @@ func (c *conn) ensureUpstream() error {
 		return errors.Wrap(err, "ensureUpstream")
 	}
 	c.upstream = up
-	c.log.InfoContext(c.ctx, "upstream connected", "addr", c.tenant.Upstream, "tenant_id", c.tenant.ID)
+	upstreamMech := c.clientMechanism
+	if c.shouldTranslatePlainToSCRAM() {
+		upstreamMech = c.cfg.UpstreamSASLMechanism
+	}
+	c.log.InfoContext(c.ctx, "upstream connected", "addr", c.tenant.Upstream, "tenant_id", c.tenant.ID, "upstream_mechanism", upstreamMech)
 	return nil
 }
 
@@ -276,7 +298,7 @@ func (c *conn) handleSaslHandshake(hdr protocol.RequestHeader, body []byte) erro
 		resp.ErrorCode = errUnsupportedSaslMech
 		c.observeHandshake(req.Mechanism, "unsupported")
 	default:
-		c.mechanism = req.Mechanism
+		c.clientMechanism = req.Mechanism
 		c.state = stateAwaitAuth
 	}
 	return c.writeResponse(hdr, resp)
@@ -304,7 +326,7 @@ func (c *conn) observeHandshake(mech, result string) {
 }
 
 func (c *conn) handleSaslAuthenticate(hdr protocol.RequestHeader, body []byte) error {
-	if auth.IsSCRAMMechanism(c.mechanism) {
+	if auth.IsSCRAMMechanism(c.clientMechanism) {
 		return c.handleSaslAuthenticateSCRAM(hdr, body)
 	}
 	return c.handleSaslAuthenticatePlain(hdr, body)
@@ -383,7 +405,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 		resp.ErrorCode = errIllegalSaslState
 		msg := "SASL handshake required"
 		resp.ErrorMessage = &msg
-		c.observeHandshake(c.mechanism, "illegal_state")
+		c.observeHandshake(c.clientMechanism, "illegal_state")
 		return c.writeResponse(hdr, resp)
 	}
 
@@ -394,7 +416,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 			resp.ErrorCode = errSaslAuthFailed
 			msg := "malformed SCRAM client-first-message"
 			resp.ErrorMessage = &msg
-			c.observeHandshake(c.mechanism, "malformed")
+			c.observeHandshake(c.clientMechanism, "malformed")
 			c.log.InfoContext(c.ctx, "sasl scram parse failed", "err", err)
 			return c.writeResponse(hdr, resp)
 		}
@@ -406,7 +428,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 			resp.ErrorCode = errSaslAuthFailed
 			msg := "authentication failed"
 			resp.ErrorMessage = &msg
-			c.observeHandshake(c.mechanism, "unauthorized")
+			c.observeHandshake(c.clientMechanism, "unauthorized")
 			c.log.InfoContext(c.ctx, "sasl auth failed", "tenant_id", username, "err", err)
 			return c.writeResponse(hdr, resp)
 		}
@@ -415,7 +437,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 		}
 		c.tenant = tenant
 
-		up, dErr := upstream.DialForSCRAM(c.ctx, tenant.Upstream, c.mechanism)
+		up, dErr := upstream.DialForSCRAM(c.ctx, tenant.Upstream, c.clientMechanism)
 		if dErr != nil {
 			if c.metrics != nil {
 				c.metrics.UpstreamErrorTotal.WithLabelValues("scram_dial").Inc()
@@ -423,7 +445,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 			resp.ErrorCode = errSaslAuthFailed
 			msg := "upstream unavailable"
 			resp.ErrorMessage = &msg
-			c.observeHandshake(c.mechanism, "upstream_error")
+			c.observeHandshake(c.clientMechanism, "upstream_error")
 			c.log.WarnContext(c.ctx, "scram upstream dial failed", "tenant_id", tenant.ID, "err", dErr)
 			return c.writeResponse(hdr, resp)
 		}
@@ -436,7 +458,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 		if c.metrics != nil {
 			c.metrics.UpstreamErrorTotal.WithLabelValues("scram_relay").Inc()
 		}
-		c.observeHandshake(c.mechanism, "upstream_error")
+		c.observeHandshake(c.clientMechanism, "upstream_error")
 		return errors.Wrap(rErr, "handleSaslAuthenticateSCRAM")
 	}
 	resp.SASLAuthBytes = respBytes
@@ -446,7 +468,7 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 		resp.ErrorMessage = &m
 	}
 	if errCode != 0 {
-		c.observeHandshake(c.mechanism, "unauthorized")
+		c.observeHandshake(c.clientMechanism, "unauthorized")
 		c.log.InfoContext(c.ctx, "scram upstream rejected", "tenant_id", c.tenant.ID, "code", errCode, "msg", errMsg)
 		return c.writeResponse(hdr, resp)
 	}
@@ -454,8 +476,8 @@ func (c *conn) handleSaslAuthenticateSCRAM(hdr protocol.RequestHeader, body []by
 	c.scramRoundsCompleted++
 	if c.scramRoundsCompleted >= 2 {
 		c.state = stateAuthenticated
-		c.observeHandshake(c.mechanism, "ok")
-		c.log.InfoContext(c.ctx, "sasl auth ok", "tenant_id", c.tenant.ID, "mechanism", c.mechanism)
+		c.observeHandshake(c.clientMechanism, "ok")
+		c.log.InfoContext(c.ctx, "sasl auth ok", "tenant_id", c.tenant.ID, "mechanism", c.clientMechanism)
 	}
 	return c.writeResponse(hdr, resp)
 }

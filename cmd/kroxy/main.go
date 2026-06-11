@@ -64,9 +64,10 @@ func run() error {
 	}
 
 	srv := proxy.NewServer(proxy.ServerConfig{
-		Listen:     cfg.Listen,
-		Advertised: cfg.Advertised,
-		TLS:        tlsCfg,
+		Listen:                cfg.Listen,
+		Advertised:            cfg.Advertised,
+		TLS:                   tlsCfg,
+		UpstreamSASLMechanism: cfg.Upstream.SASL.Mechanism,
 	}, res, metrics, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

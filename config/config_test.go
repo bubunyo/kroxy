@@ -241,6 +241,71 @@ tls:
 				assert.Equal(t, "/etc/kroxy/certs/server.key", c.TLS.KeyFile)
 			},
 		},
+		{
+			name: "upstream sasl scram-256 valid",
+			yaml: `
+advertised: "kroxy:9092"
+upstream:
+  bootstrap: "k:9092"
+  sasl:
+    mechanism: SCRAM-SHA-256
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.Equal(t, "SCRAM-SHA-256", c.Upstream.SASL.Mechanism)
+			},
+		},
+		{
+			name: "upstream sasl empty is plain passthrough",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.Empty(t, c.Upstream.SASL.Mechanism)
+			},
+		},
+		{
+			name: "upstream sasl plain rejected",
+			yaml: `
+advertised: "kroxy:9092"
+upstream:
+  bootstrap: "k:9092"
+  sasl:
+    mechanism: PLAIN
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+`,
+			wantErr: true,
+		},
+		{
+			name: "upstream sasl unknown mechanism rejected",
+			yaml: `
+advertised: "kroxy:9092"
+upstream:
+  bootstrap: "k:9092"
+  sasl:
+    mechanism: GSSAPI
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
