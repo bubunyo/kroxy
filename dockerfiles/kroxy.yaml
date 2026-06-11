@@ -1,6 +1,13 @@
 listen: ":9092"
 advertised: "kroxy:9092"
 
+# Terminate TLS on the client-facing listener. Disabled here so the demo stack
+# stays plaintext; mount a cert/key and enable to serve clients over TLS.
+# tls:
+#   enabled: true
+#   cert_file: /etc/kroxy/certs/server.crt
+#   key_file: /etc/kroxy/certs/server.key
+
 upstream:
   bootstrap: "kafka:9093"
 

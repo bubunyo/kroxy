@@ -143,6 +143,11 @@ kroxy reads a single YAML file. Minimal example:
 listen: ":9092"               # client-facing Kafka listener
 advertised: "kroxy:9092"      # what kroxy advertises as broker 0
 
+tls:                          # optional; omit for a plaintext listener
+  enabled: true
+  cert_file: /etc/kroxy/certs/server.crt
+  key_file:  /etc/kroxy/certs/server.key
+
 upstream:
   bootstrap: "kafka:9093"     # default upstream for tenants that omit it
 
@@ -178,6 +183,11 @@ Notes:
 - The `resolver.memory.tenants` list may be empty **only if** the admin
   RPC is enabled — otherwise the proxy has nothing to authorise against.
 - A tenant's `id` and `topic_prefix` are both required.
+- `tls` is optional. When `enabled`, kroxy terminates TLS on the client
+  listener using `cert_file`/`key_file` (both required); the upstream broker
+  connection is unaffected. Omit the block for a plaintext listener. Server-side
+  TLS only — clients are not asked for a certificate, and the keypair is loaded
+  once at startup (restart to rotate).
 
 ## Authentication model
 
@@ -289,8 +299,10 @@ examples/          # admin-curl.sh helper
 v1 is deliberately small. The following are explicitly out of scope and
 deferred:
 
-- **No TLS** on either the client or upstream side. Run kroxy on a
-  trusted network or behind a TLS-terminating sidecar.
+- **Client TLS termination** is supported via the `tls` config block
+  (server-side only, no mTLS, no hot reload). **Upstream TLS is not** — the
+  connection to the broker is always plaintext, so run kroxy on a trusted
+  network relative to the broker.
 - **SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512.** No OAUTHBEARER, no
   mTLS, no Kerberos. No SASL channel binding.
 - **Single shared upstream cluster.** Per-tenant `upstream` is plumbed
