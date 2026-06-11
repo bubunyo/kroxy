@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net"
@@ -31,6 +32,9 @@ type Server struct {
 type ServerConfig struct {
 	Listen     string
 	Advertised string
+	// TLS, when non-nil, terminates TLS on the client-facing listener. A nil
+	// value leaves the listener plaintext.
+	TLS *tls.Config
 }
 
 // NewServer constructs a Server. It does not start listening; call Run.
@@ -47,8 +51,11 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return pkgerrors.Wrap(err, "Run")
 	}
+	if s.cfg.TLS != nil {
+		ln = tls.NewListener(ln, s.cfg.TLS)
+	}
 	s.listener = ln
-	s.log.InfoContext(ctx, "kroxy listening", "addr", ln.Addr().String(), "advertised", s.cfg.Advertised)
+	s.log.InfoContext(ctx, "kroxy listening", "addr", ln.Addr().String(), "advertised", s.cfg.Advertised, "tls", s.cfg.TLS != nil)
 
 	go func() {
 		<-ctx.Done()

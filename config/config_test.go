@@ -1,9 +1,18 @@
 package config_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bubunyo/kroxy/config"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +25,58 @@ func writeFile(t *testing.T, contents string) string {
 	p := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(p, []byte(contents), 0o600))
 	return p
+}
+
+// writeKeyPair writes a self-signed cert/key PEM pair into a temp dir and
+// returns their paths.
+func writeKeyPair(t *testing.T) (certPath, keyPath string) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "kroxy-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	require.NoError(t, err)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	certPath = filepath.Join(dir, "server.crt")
+	keyPath = filepath.Join(dir, "server.key")
+	require.NoError(t, os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600))
+	return certPath, keyPath
+}
+
+func TestTLSConfig_Build(t *testing.T) {
+	t.Parallel()
+
+	t.Run("disabled returns nil", func(t *testing.T) {
+		t.Parallel()
+		got, err := config.TLSConfig{Enabled: false}.Build()
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("enabled loads keypair", func(t *testing.T) {
+		t.Parallel()
+		cert, key := writeKeyPair(t)
+		got, err := config.TLSConfig{Enabled: true, CertFile: cert, KeyFile: key}.Build()
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Len(t, got.Certificates, 1)
+		assert.Equal(t, uint16(tls.VersionTLS12), got.MinVersion)
+	})
+
+	t.Run("enabled with missing file errors", func(t *testing.T) {
+		t.Parallel()
+		_, err := config.TLSConfig{Enabled: true, CertFile: "/nope.crt", KeyFile: "/nope.key"}.Build()
+		require.Error(t, err)
+	})
 }
 
 func TestLoad(t *testing.T) {
@@ -143,6 +204,42 @@ resolver:
       - topic_prefix: "tenantA."
 `,
 			wantErr: true,
+		},
+		{
+			name: "tls enabled without cert/key",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+tls:
+  enabled: true
+`,
+			wantErr: true,
+		},
+		{
+			name: "tls enabled with cert and key",
+			yaml: `
+advertised: "kroxy:9092"
+upstream: { bootstrap: "k:9092" }
+resolver:
+  memory:
+    tenants:
+      - id: tenantA
+        topic_prefix: "tenantA."
+tls:
+  enabled: true
+  cert_file: /etc/kroxy/certs/server.crt
+  key_file: /etc/kroxy/certs/server.key
+`,
+			check: func(t *testing.T, c config.Config) {
+				assert.True(t, c.TLS.Enabled)
+				assert.Equal(t, "/etc/kroxy/certs/server.crt", c.TLS.CertFile)
+				assert.Equal(t, "/etc/kroxy/certs/server.key", c.TLS.KeyFile)
+			},
 		},
 	}
 

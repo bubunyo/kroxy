@@ -58,9 +58,15 @@ func run() error {
 		metrics = observability.NewMetrics()
 	}
 
+	tlsCfg, err := cfg.TLS.Build()
+	if err != nil {
+		return err
+	}
+
 	srv := proxy.NewServer(proxy.ServerConfig{
 		Listen:     cfg.Listen,
 		Advertised: cfg.Advertised,
+		TLS:        tlsCfg,
 	}, res, metrics, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -2,6 +2,7 @@
 package config
 
 import (
+	"crypto/tls"
 	"net"
 	"os"
 
@@ -14,11 +15,39 @@ import (
 type Config struct {
 	Listen     string          `yaml:"listen"`
 	Advertised string          `yaml:"advertised"`
+	TLS        TLSConfig       `yaml:"tls"`
 	Upstream   UpstreamConfig  `yaml:"upstream"`
 	Resolver   resolver.Config `yaml:"resolver"`
 	Log        LogConfig       `yaml:"log"`
 	Metrics    MetricsConfig   `yaml:"metrics"`
 	Admin      AdminConfig     `yaml:"admin"`
+}
+
+// TLSConfig configures TLS termination on the client-facing listener. When
+// disabled (the default) the listener is plaintext. kroxy is the TLS endpoint;
+// the upstream broker connection is unaffected. Server-side TLS only — clients
+// are not asked for a certificate.
+type TLSConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+// Build loads the keypair and returns the listener's *tls.Config, or nil when
+// TLS is disabled (so callers can pass the result straight through and treat
+// nil as plaintext).
+func (t TLSConfig) Build() (*tls.Config, error) {
+	if !t.Enabled {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(t.CertFile, t.KeyFile)
+	if err != nil {
+		return nil, errors.Wrap(err, "TLSConfig.Build")
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // MetricsConfig configures the Prometheus metrics endpoint.
@@ -110,6 +139,9 @@ func (c *Config) validate() error {
 		if _, _, err := net.SplitHostPort(c.Admin.Listen); err != nil {
 			return errors.Wrapf(err, "config: admin.listen is invalid")
 		}
+	}
+	if c.TLS.Enabled && (c.TLS.CertFile == "" || c.TLS.KeyFile == "") {
+		return errors.New("config: tls.cert_file and tls.key_file are required when tls.enabled")
 	}
 	return nil
 }
