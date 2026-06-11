@@ -13,6 +13,8 @@ import (
 	"github.com/bubunyo/kroxy/protocol"
 	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 // dialTimeout caps the time spent establishing the TCP connection and
@@ -86,6 +88,85 @@ func DialForSCRAM(ctx context.Context, addr, mechanism string) (*Conn, error) {
 		return nil, errors.Wrap(err, "DialForSCRAM")
 	}
 	return c, nil
+}
+
+// DialSCRAM opens a TCP connection to addr and authenticates with the given
+// SCRAM mechanism, acting as the SCRAM client itself: it computes the client
+// proof from username and the plaintext password. This is the PLAIN->SCRAM
+// translation path — a client that authenticated to kroxy with SASL/PLAIN
+// (so kroxy holds the plaintext password) is bridged to an upstream broker
+// that only accepts SCRAM. It differs from DialForSCRAM, which relays an
+// already-SCRAM client's frames verbatim without ever seeing the password.
+// mechanism must be auth.MechanismSCRAMSHA256 or auth.MechanismSCRAMSHA512.
+func DialSCRAM(ctx context.Context, addr, mechanism, username, password string) (*Conn, error) {
+	if !auth.IsSCRAMMechanism(mechanism) {
+		return nil, errors.Errorf("DialSCRAM: unsupported mechanism %q", mechanism)
+	}
+	c, err := dialAndNegotiate(ctx, addr, mechanism)
+	if err != nil {
+		return nil, errors.Wrap(err, "DialSCRAM")
+	}
+	if err := c.scramAuthenticate(ctx, mechanism, username, password); err != nil {
+		_ = c.nc.Close()
+		return nil, errors.Wrap(err, "DialSCRAM")
+	}
+	if err := c.nc.SetDeadline(time.Time{}); err != nil {
+		_ = c.nc.Close()
+		return nil, errors.Wrap(err, "DialSCRAM")
+	}
+	return c, nil
+}
+
+// scramAuthenticate drives the SCRAM message exchange as the client. franz-go's
+// scram mechanism computes the client-first / client-final messages and
+// verifies the server's final signature; kroxy carries each message to the
+// broker over SaslAuthenticate via RelaySASLAuthenticate and feeds the broker's
+// reply back into the session until the exchange completes.
+func (c *Conn) scramAuthenticate(ctx context.Context, mechanism, username, password string) error {
+	a := scram.Auth{User: username, Pass: password}
+	var mech sasl.Mechanism
+	switch mechanism {
+	case auth.MechanismSCRAMSHA256:
+		mech = a.AsSha256Mechanism()
+	case auth.MechanismSCRAMSHA512:
+		mech = a.AsSha512Mechanism()
+	default:
+		return errors.Errorf("scramAuthenticate: unsupported mechanism %q", mechanism)
+	}
+
+	session, clientMsg, err := mech.Authenticate(ctx, c.nc.RemoteAddr().String())
+	if err != nil {
+		return errors.Wrap(err, "scramAuthenticate")
+	}
+
+	// SCRAM-SHA-256/512 are bounded to two round trips, but loop on the
+	// session's "done" signal rather than a fixed count so the franz-go
+	// mechanism stays the single source of truth for the exchange length.
+	for {
+		serverMsg, errCode, errMsg, rErr := c.RelaySASLAuthenticate(clientMsg)
+		if rErr != nil {
+			return errors.Wrap(rErr, "scramAuthenticate")
+		}
+		if errCode != 0 {
+			return errors.Errorf("scramAuthenticate: upstream error %d: %s", errCode, errMsg)
+		}
+		done, next, cErr := session.Challenge(serverMsg)
+		if cErr != nil {
+			return errors.Wrap(cErr, "scramAuthenticate")
+		}
+		if done {
+			if len(next) > 0 {
+				if _, errCode, errMsg, rErr = c.RelaySASLAuthenticate(next); rErr != nil {
+					return errors.Wrap(rErr, "scramAuthenticate")
+				}
+				if errCode != 0 {
+					return errors.Errorf("scramAuthenticate: upstream error %d: %s", errCode, errMsg)
+				}
+			}
+			return nil
+		}
+		clientMsg = next
+	}
 }
 
 // dialAndNegotiate opens the TCP connection, runs ApiVersions, and runs

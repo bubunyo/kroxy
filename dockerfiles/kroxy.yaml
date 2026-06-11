@@ -10,6 +10,10 @@ advertised: "kroxy:9092"
 
 upstream:
   bootstrap: "kafka:9093"
+  # Authenticate PLAIN clients to the broker via SCRAM instead of forwarding
+  # PLAIN verbatim. Omitted here so the demo stays PLAIN pass-through.
+  # sasl:
+  #   mechanism: SCRAM-SHA-256
 
 resolver:
   type: memory
