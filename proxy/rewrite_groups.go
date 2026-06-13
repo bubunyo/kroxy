@@ -88,6 +88,7 @@ func (c *conn) handleJoinGroup(hdr protocol.RequestHeader, body []byte) error {
 	if err := c.roundTripTyped(req, resp, hdr.ClientID); err != nil {
 		return errors.Wrap(err, "handleJoinGroup")
 	}
+	rewrite.JoinGroupResponseOut(c.tenant.TopicPrefix, resp)
 	return c.writeTypedResponse(hdr, resp)
 }
 
@@ -103,6 +104,7 @@ func (c *conn) handleSyncGroup(hdr protocol.RequestHeader, body []byte) error {
 	if err := c.roundTripTyped(req, resp, hdr.ClientID); err != nil {
 		return errors.Wrap(err, "handleSyncGroup")
 	}
+	rewrite.SyncGroupResponseOut(c.tenant.TopicPrefix, resp)
 	return c.writeTypedResponse(hdr, resp)
 }
 

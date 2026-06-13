@@ -5,6 +5,7 @@ import (
 
 	"github.com/bubunyo/kroxy/rewrite"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -244,4 +245,126 @@ func TestTransactions_PrefixesTxnAndGroup(t *testing.T) {
 	}
 	rewrite.TxnOffsetCommitResponseOut(tp, tcr)
 	assert.Equal(t, "orders", tcr.Topics[0].Topic)
+}
+
+func encSub(topics []string, owned map[string][]int32) []byte {
+	m := kmsg.NewConsumerMemberMetadata()
+	m.Version = 1
+	m.Topics = topics
+	m.UserData = []byte("ud")
+	for tname, parts := range owned {
+		op := kmsg.NewConsumerMemberMetadataOwnedPartition()
+		op.Topic = tname
+		op.Partitions = parts
+		m.OwnedPartitions = append(m.OwnedPartitions, op)
+	}
+	return m.AppendTo(nil)
+}
+
+func decSub(t *testing.T, b []byte) kmsg.ConsumerMemberMetadata {
+	t.Helper()
+	var m kmsg.ConsumerMemberMetadata
+	require.NoError(t, m.ReadFrom(b))
+	return m
+}
+
+func encAsg(topic string, parts []int32) []byte {
+	a := kmsg.NewConsumerMemberAssignment()
+	a.Version = 1
+	at := kmsg.NewConsumerMemberAssignmentTopic()
+	at.Topic = topic
+	at.Partitions = parts
+	a.Topics = append(a.Topics, at)
+	a.UserData = []byte("ud")
+	return a.AppendTo(nil)
+}
+
+func decAsg(t *testing.T, b []byte) kmsg.ConsumerMemberAssignment {
+	t.Helper()
+	var a kmsg.ConsumerMemberAssignment
+	require.NoError(t, a.ReadFrom(b))
+	return a
+}
+
+func TestJoinGroup_RewritesSubscriptionTopics(t *testing.T) {
+	t.Parallel()
+
+	req := &kmsg.JoinGroupRequest{
+		Group:        "consumer-1",
+		ProtocolType: "consumer",
+		Protocols: []kmsg.JoinGroupRequestProtocol{
+			{Name: "range", Metadata: encSub([]string{"orders", "events"}, map[string][]int32{"orders": {0, 1}})},
+		},
+	}
+	rewrite.JoinGroupRequestIn(tp, req)
+	assert.Equal(t, "tA.consumer-1", req.Group)
+
+	got := decSub(t, req.Protocols[0].Metadata)
+	assert.Equal(t, []string{"tA.orders", "tA.events"}, got.Topics)
+	require.Len(t, got.OwnedPartitions, 1)
+	assert.Equal(t, "tA.orders", got.OwnedPartitions[0].Topic)
+	assert.Equal(t, []int32{0, 1}, got.OwnedPartitions[0].Partitions)
+	assert.Equal(t, []byte("ud"), got.UserData)
+
+	pt := "consumer"
+	resp := &kmsg.JoinGroupResponse{
+		ProtocolType: &pt,
+		Members: []kmsg.JoinGroupResponseMember{
+			{MemberID: "m1", ProtocolMetadata: encSub([]string{"tA.orders", "tA.events"}, nil)},
+		},
+	}
+	rewrite.JoinGroupResponseOut(tp, resp)
+	gotResp := decSub(t, resp.Members[0].ProtocolMetadata)
+	assert.Equal(t, []string{"orders", "events"}, gotResp.Topics)
+}
+
+func TestSyncGroup_RewritesAssignmentTopics(t *testing.T) {
+	t.Parallel()
+
+	req := &kmsg.SyncGroupRequest{
+		Group: "consumer-1",
+		GroupAssignment: []kmsg.SyncGroupRequestGroupAssignment{
+			{MemberID: "m1", MemberAssignment: encAsg("orders", []int32{0, 1})},
+		},
+	}
+	rewrite.SyncGroupRequestIn(tp, req)
+	assert.Equal(t, "tA.consumer-1", req.Group)
+	gotReq := decAsg(t, req.GroupAssignment[0].MemberAssignment)
+	require.Len(t, gotReq.Topics, 1)
+	assert.Equal(t, "tA.orders", gotReq.Topics[0].Topic)
+	assert.Equal(t, []int32{0, 1}, gotReq.Topics[0].Partitions)
+
+	resp := &kmsg.SyncGroupResponse{MemberAssignment: encAsg("tA.orders", []int32{0, 1})}
+	rewrite.SyncGroupResponseOut(tp, resp)
+	gotResp := decAsg(t, resp.MemberAssignment)
+	assert.Equal(t, "orders", gotResp.Topics[0].Topic)
+	assert.Equal(t, []byte("ud"), gotResp.UserData)
+}
+
+func TestJoinGroup_NonConsumerProtocolUntouched(t *testing.T) {
+	t.Parallel()
+
+	blob := []byte("opaque-connect-payload")
+	req := &kmsg.JoinGroupRequest{
+		Group:        "connect-cluster",
+		ProtocolType: "connect",
+		Protocols:    []kmsg.JoinGroupRequestProtocol{{Name: "default", Metadata: blob}},
+	}
+	rewrite.JoinGroupRequestIn(tp, req)
+	assert.Equal(t, "tA.connect-cluster", req.Group)
+	assert.Equal(t, blob, req.Protocols[0].Metadata, "non-consumer protocol metadata must pass through unchanged")
+}
+
+func TestJoinGroup_EmptyPrefixLeavesBlobsByteIdentical(t *testing.T) {
+	t.Parallel()
+
+	orig := encSub([]string{"orders"}, nil)
+	cp := append([]byte(nil), orig...)
+	req := &kmsg.JoinGroupRequest{
+		Group:        "consumer-1",
+		ProtocolType: "consumer",
+		Protocols:    []kmsg.JoinGroupRequestProtocol{{Name: "range", Metadata: cp}},
+	}
+	rewrite.JoinGroupRequestIn("", req)
+	assert.Equal(t, orig, req.Protocols[0].Metadata)
 }
