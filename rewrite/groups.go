@@ -102,14 +102,91 @@ func OffsetDeleteResponseOut(prefix string, resp *kmsg.OffsetDeleteResponse) {
 	}
 }
 
-// JoinGroupRequestIn prefixes the group ID.
-func JoinGroupRequestIn(prefix string, req *kmsg.JoinGroupRequest) {
-	req.Group = PrefixIn(prefix, req.Group)
+// consumerProtocolType is the only ProtocolType whose JoinGroup/SyncGroup
+// member blobs we decode; others (e.g. Kafka Connect) pass through untouched.
+const consumerProtocolType = "consumer"
+
+// rewriteConsumerSubscription applies fn to every topic in a ConsumerMemberMetadata
+// blob (JoinGroup protocol metadata). A blob that doesn't decode is returned as-is.
+func rewriteConsumerSubscription(meta []byte, fn func(string) string) []byte {
+	if len(meta) == 0 {
+		return meta
+	}
+	var m kmsg.ConsumerMemberMetadata
+	if err := m.ReadFrom(meta); err != nil {
+		return meta
+	}
+	for i := range m.Topics {
+		m.Topics[i] = fn(m.Topics[i])
+	}
+	for i := range m.OwnedPartitions {
+		m.OwnedPartitions[i].Topic = fn(m.OwnedPartitions[i].Topic)
+	}
+	return m.AppendTo(nil)
 }
 
-// SyncGroupRequestIn prefixes the group ID.
+// rewriteConsumerAssignment applies fn to every topic in a ConsumerMemberAssignment
+// blob (SyncGroup member assignment). A blob that doesn't decode is returned as-is.
+func rewriteConsumerAssignment(asg []byte, fn func(string) string) []byte {
+	if len(asg) == 0 {
+		return asg
+	}
+	var a kmsg.ConsumerMemberAssignment
+	if err := a.ReadFrom(asg); err != nil {
+		return asg
+	}
+	for i := range a.Topics {
+		a.Topics[i].Topic = fn(a.Topics[i].Topic)
+	}
+	return a.AppendTo(nil)
+}
+
+// JoinGroupRequestIn prefixes the group ID and the subscribed topics in each
+// member's subscription blob.
+func JoinGroupRequestIn(prefix string, req *kmsg.JoinGroupRequest) {
+	req.Group = PrefixIn(prefix, req.Group)
+	if prefix == "" || req.ProtocolType != consumerProtocolType {
+		return
+	}
+	for i := range req.Protocols {
+		req.Protocols[i].Metadata = rewriteConsumerSubscription(req.Protocols[i].Metadata,
+			func(t string) string { return PrefixIn(prefix, t) })
+	}
+}
+
+// JoinGroupResponseOut strips the prefix from the subscription topics returned
+// to the leader, so it assigns in client space (matching what it sees via Metadata).
+func JoinGroupResponseOut(prefix string, resp *kmsg.JoinGroupResponse) {
+	if prefix == "" || (resp.ProtocolType != nil && *resp.ProtocolType != consumerProtocolType) {
+		return
+	}
+	for i := range resp.Members {
+		resp.Members[i].ProtocolMetadata = rewriteConsumerSubscription(resp.Members[i].ProtocolMetadata,
+			func(t string) string { return StripOut(prefix, t) })
+	}
+}
+
+// SyncGroupRequestIn prefixes the group ID and the topics in each assignment
+// blob the leader submits.
 func SyncGroupRequestIn(prefix string, req *kmsg.SyncGroupRequest) {
 	req.Group = PrefixIn(prefix, req.Group)
+	if prefix == "" || (req.ProtocolType != nil && *req.ProtocolType != consumerProtocolType) {
+		return
+	}
+	for i := range req.GroupAssignment {
+		req.GroupAssignment[i].MemberAssignment = rewriteConsumerAssignment(req.GroupAssignment[i].MemberAssignment,
+			func(t string) string { return PrefixIn(prefix, t) })
+	}
+}
+
+// SyncGroupResponseOut strips the prefix from the topics in the member's
+// assignment, so it fetches client-space names (re-prefixed on Fetch).
+func SyncGroupResponseOut(prefix string, resp *kmsg.SyncGroupResponse) {
+	if prefix == "" || (resp.ProtocolType != nil && *resp.ProtocolType != consumerProtocolType) {
+		return
+	}
+	resp.MemberAssignment = rewriteConsumerAssignment(resp.MemberAssignment,
+		func(t string) string { return StripOut(prefix, t) })
 }
 
 // HeartbeatRequestIn prefixes the group ID.
@@ -129,11 +206,21 @@ func DescribeGroupsRequestIn(prefix string, req *kmsg.DescribeGroupsRequest) {
 	}
 }
 
-// DescribeGroupsResponseOut strips the tenant prefix from each group ID in
-// the response.
+// DescribeGroupsResponseOut strips the tenant prefix from each group ID and
+// from the topics in every member's subscription and assignment blob.
 func DescribeGroupsResponseOut(prefix string, resp *kmsg.DescribeGroupsResponse) {
+	strip := func(t string) string { return StripOut(prefix, t) }
 	for i := range resp.Groups {
-		resp.Groups[i].Group = StripOut(prefix, resp.Groups[i].Group)
+		g := &resp.Groups[i]
+		g.Group = StripOut(prefix, g.Group)
+		if prefix == "" || (g.ProtocolType != "" && g.ProtocolType != consumerProtocolType) {
+			continue
+		}
+		for j := range g.Members {
+			m := &g.Members[j]
+			m.ProtocolMetadata = rewriteConsumerSubscription(m.ProtocolMetadata, strip)
+			m.MemberAssignment = rewriteConsumerAssignment(m.MemberAssignment, strip)
+		}
 	}
 }
 
