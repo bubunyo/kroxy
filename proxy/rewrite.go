@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"log/slog"
 	"net"
 	"strconv"
 
@@ -52,10 +53,16 @@ func (c *conn) handleMetadata(hdr protocol.RequestHeader, body []byte) error {
 		return errors.Wrap(err, "handleMetadata")
 	}
 	rewrite.MetadataRequestIn(c.tenant.TopicPrefix, req)
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "metadata -> broker", "v", hdr.APIVersion, "tenant", c.tenant.ID, "req", dbgMetadataReq(req))
+	}
 
 	resp := kmsg.NewPtrMetadataResponse()
 	if err := c.roundTripTyped(req, resp, hdr.ClientID); err != nil {
 		return errors.Wrap(err, "handleMetadata")
+	}
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "metadata <- broker", "resp", dbgMetadataResp(resp))
 	}
 
 	host, port, err := c.advertised()
@@ -96,10 +103,16 @@ func (c *conn) handleFetch(hdr protocol.RequestHeader, body []byte) error {
 		return errors.Wrap(err, "handleFetch")
 	}
 	rewrite.FetchRequestIn(c.tenant.TopicPrefix, req)
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "fetch -> broker", "v", hdr.APIVersion, "tenant", c.tenant.ID, "req", dbgFetchReq(req))
+	}
 
 	resp := kmsg.NewPtrFetchResponse()
 	if err := c.roundTripTyped(req, resp, hdr.ClientID); err != nil {
 		return errors.Wrap(err, "handleFetch")
+	}
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "fetch <- broker", "resp", dbgFetchResp(resp))
 	}
 	rewrite.FetchResponseOut(c.tenant.TopicPrefix, resp)
 	return c.writeTypedResponse(hdr, resp)
@@ -112,10 +125,16 @@ func (c *conn) handleListOffsets(hdr protocol.RequestHeader, body []byte) error 
 		return errors.Wrap(err, "handleListOffsets")
 	}
 	rewrite.ListOffsetsRequestIn(c.tenant.TopicPrefix, req)
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "listoffsets -> broker", "v", hdr.APIVersion, "tenant", c.tenant.ID, "req", dbgListOffsetsReq(req))
+	}
 
 	resp := kmsg.NewPtrListOffsetsResponse()
 	if err := c.roundTripTyped(req, resp, hdr.ClientID); err != nil {
 		return errors.Wrap(err, "handleListOffsets")
+	}
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "listoffsets <- broker", "resp", dbgListOffsetsResp(resp))
 	}
 	rewrite.ListOffsetsResponseOut(c.tenant.TopicPrefix, resp)
 	return c.writeTypedResponse(hdr, resp)

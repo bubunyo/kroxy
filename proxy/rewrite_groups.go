@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"log/slog"
+
 	"github.com/bubunyo/kroxy/protocol"
 	"github.com/bubunyo/kroxy/rewrite"
 	"github.com/pkg/errors"
@@ -51,10 +53,16 @@ func (c *conn) handleOffsetFetch(hdr protocol.RequestHeader, body []byte) error 
 		return errors.Wrap(err, "handleOffsetFetch")
 	}
 	rewrite.OffsetFetchRequestIn(c.tenant.TopicPrefix, req)
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "offsetfetch -> broker", "v", hdr.APIVersion, "tenant", c.tenant.ID, "req", dbgOffsetFetchReq(req))
+	}
 
 	resp := kmsg.NewPtrOffsetFetchResponse()
 	if err := c.roundTripTyped(req, resp, hdr.ClientID); err != nil {
 		return errors.Wrap(err, "handleOffsetFetch")
+	}
+	if c.log.Enabled(c.ctx, slog.LevelDebug) {
+		c.log.DebugContext(c.ctx, "offsetfetch <- broker", "resp", dbgOffsetFetchResp(resp))
 	}
 	rewrite.OffsetFetchResponseOut(c.tenant.TopicPrefix, resp)
 	return c.writeTypedResponse(hdr, resp)
