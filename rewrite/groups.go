@@ -206,11 +206,21 @@ func DescribeGroupsRequestIn(prefix string, req *kmsg.DescribeGroupsRequest) {
 	}
 }
 
-// DescribeGroupsResponseOut strips the tenant prefix from each group ID in
-// the response.
+// DescribeGroupsResponseOut strips the tenant prefix from each group ID and
+// from the topics in every member's subscription and assignment blob.
 func DescribeGroupsResponseOut(prefix string, resp *kmsg.DescribeGroupsResponse) {
+	strip := func(t string) string { return StripOut(prefix, t) }
 	for i := range resp.Groups {
-		resp.Groups[i].Group = StripOut(prefix, resp.Groups[i].Group)
+		g := &resp.Groups[i]
+		g.Group = StripOut(prefix, g.Group)
+		if prefix == "" || (g.ProtocolType != "" && g.ProtocolType != consumerProtocolType) {
+			continue
+		}
+		for j := range g.Members {
+			m := &g.Members[j]
+			m.ProtocolMetadata = rewriteConsumerSubscription(m.ProtocolMetadata, strip)
+			m.MemberAssignment = rewriteConsumerAssignment(m.MemberAssignment, strip)
+		}
 	}
 }
 

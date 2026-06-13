@@ -156,6 +156,27 @@ func TestDescribeGroups_RoundTrip(t *testing.T) {
 	assert.Equal(t, "b", resp.Groups[1].Group)
 }
 
+func TestDescribeGroups_StripsMemberBlobs(t *testing.T) {
+	t.Parallel()
+	resp := &kmsg.DescribeGroupsResponse{
+		Groups: []kmsg.DescribeGroupsResponseGroup{{
+			Group:        "tA.consumer-1",
+			ProtocolType: "consumer",
+			Members: []kmsg.DescribeGroupsResponseGroupMember{{
+				MemberID:         "m1",
+				ProtocolMetadata: encSub([]string{"tA.orders", "tA.events"}, nil),
+				MemberAssignment: encAsg("tA.orders", []int32{0, 1}),
+			}},
+		}},
+	}
+	rewrite.DescribeGroupsResponseOut(tp, resp)
+
+	assert.Equal(t, "consumer-1", resp.Groups[0].Group)
+	m := resp.Groups[0].Members[0]
+	assert.Equal(t, []string{"orders", "events"}, decSub(t, m.ProtocolMetadata).Topics)
+	assert.Equal(t, "orders", decAsg(t, m.MemberAssignment).Topics[0].Topic)
+}
+
 func TestListGroups_FiltersOtherTenants(t *testing.T) {
 	t.Parallel()
 	resp := &kmsg.ListGroupsResponse{
